@@ -1,7 +1,7 @@
 """
 M3 Database Models — SQLAlchemy 2.0 declarative ORM.
 
-Tables: raw_items, wiki_pages, wiki_links, wiki_schema, changelog.
+Tables: raw_items, wiki_pages, wiki_links, wiki_schema, changelog, item_notes.
 """
 
 import uuid
