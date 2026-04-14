@@ -149,7 +149,6 @@ class WikiPageLinkedToItem(BaseModel):
 
 
 class ItemDetailResponse(RawItemResponse):
-    processing_started_at: datetime | None = None
     notes: list[ItemNoteResponse] = Field(default_factory=list)
     linked_wiki_pages: list[WikiPageLinkedToItem] = Field(default_factory=list)
 
@@ -164,9 +163,14 @@ class BulkIdsRequest(BaseModel):
     ids: list[uuid.UUID]
 
 
+class BulkOpError(BaseModel):
+    id: str
+    error: str
+
+
 class BulkOpResult(BaseModel):
     succeeded: list[uuid.UUID] = Field(default_factory=list)
-    failed: list[dict] = Field(default_factory=list)  # {"id": uuid, "error": str}
+    failed: list[BulkOpError] = Field(default_factory=list)
 
 
 class CountItem(BaseModel):
