@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from m3.api.deps import get_db, get_files, verify_auth
 from m3.schemas.api import (
     ItemDetailResponse,
+    ItemNoteCreate,
     ItemNoteResponse,
+    ItemNoteUpdate,
     ItemPatchRequest,
     WikiPageLinkedToItem,
 )
@@ -188,3 +190,67 @@ async def retry_item(
     await pool.enqueue_job("process_item", str(item_id))
 
     return await _build_detail_response(item, db, files)
+
+
+@router.post("/{item_id}/notes", response_model=ItemNoteResponse, status_code=201)
+async def create_note(
+    item_id: uuid.UUID,
+    body: ItemNoteCreate,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    item = await db.get(RawItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    note = ItemNote(item_id=item_id, content=body.content)
+    db.add(note)
+    await db.flush()
+
+    return ItemNoteResponse(
+        id=note.id,
+        item_id=note.item_id,
+        content=note.content,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )
+
+
+@router.patch("/{item_id}/notes/{note_id}", response_model=ItemNoteResponse)
+async def update_note(
+    item_id: uuid.UUID,
+    note_id: uuid.UUID,
+    body: ItemNoteUpdate,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    note = await db.get(ItemNote, note_id)
+    if not note or note.item_id != item_id:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    note.content = body.content
+    await db.flush()
+    await db.refresh(note)
+
+    return ItemNoteResponse(
+        id=note.id,
+        item_id=note.item_id,
+        content=note.content,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )
+
+
+@router.delete("/{item_id}/notes/{note_id}", status_code=204)
+async def delete_note(
+    item_id: uuid.UUID,
+    note_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    note = await db.get(ItemNote, note_id)
+    if not note or note.item_id != item_id:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    await db.delete(note)
+    await db.flush()
