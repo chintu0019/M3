@@ -27,3 +27,6 @@ build/
 pg_data/
 redis_data/
 minio_data/
+
+# Brainstorming working dir
+.superpowers/
