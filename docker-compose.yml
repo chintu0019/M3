@@ -45,7 +45,7 @@ services:
       - "9001:9001"
 
   server:
-    build: ./server
+    build: .
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,7 +68,7 @@ services:
       - "8000:8000"
 
   worker:
-    build: ./server
+    build: .
     command: m3-worker
     depends_on:
       postgres:

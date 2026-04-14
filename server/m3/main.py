@@ -9,8 +9,10 @@ from pathlib import Path
 import uvicorn
 from arq import create_pool
 from arq.connections import RedisSettings
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from m3.api.chat import router as chat_router
 from m3.api.ingest import router as ingest_router
@@ -150,6 +152,20 @@ app.include_router(settings_router)
 @app.get("/api/v1/status")
 async def status():
     return {"status": "ok", "version": "0.1.0"}
+
+
+# Serve the React client -- must come after all API routes
+STATIC_DIR = Path("/app/static")
+if STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{path:path}")
+    async def serve_spa(path: str):
+        """Serve static files or fall back to index.html for SPA routing."""
+        file_path = STATIC_DIR / path
+        if path and file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(STATIC_DIR / "index.html")
 
 
 def run():

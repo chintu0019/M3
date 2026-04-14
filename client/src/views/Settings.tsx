@@ -398,10 +398,6 @@ export default function Settings() {
     }
   };
 
-  const editingProviderData = editingProvider
-    ? llmSettings?.providers.find((p) => p.name === editingProvider)
-    : null;
-
   return (
     <div className="max-w-2xl mx-auto p-6">
       <h1 className="text-2xl font-bold mb-6">Settings</h1>
