@@ -88,6 +88,7 @@ class CompilationEngine(ABC):
         existing_projects: list[str],
         user_tags: list[str] | None = None,
         user_project: str | None = None,
+        user_notes: str | None = None,
     ) -> Classification:
         ...
 
@@ -98,6 +99,7 @@ class CompilationEngine(ABC):
         original_content: str,
         related_pages: list[dict],
         wiki_schema: str,
+        user_notes: str | None = None,
     ) -> CompileResult:
         ...
 
