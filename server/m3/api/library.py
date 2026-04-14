@@ -9,16 +9,21 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from m3.api.deps import get_db, get_files, verify_auth
 from m3.schemas.api import (
+    BulkIdsRequest,
+    BulkOpError,
+    BulkOpResult,
+    CountItem,
     ItemDetailResponse,
     ItemNoteCreate,
     ItemNoteResponse,
     ItemNoteUpdate,
     ItemPatchRequest,
+    LibraryStatsResponse,
     WikiPageLinkedToItem,
 )
 from m3.storage.files import FileStore
@@ -86,6 +91,155 @@ async def _build_detail_response(
         notes=notes,
         linked_wiki_pages=linked_pages,
     )
+
+
+# --- Static-path routes first (must precede /{item_id} to avoid UUID coercion clash) ---
+
+
+@router.post("/bulk/retry", response_model=BulkOpResult)
+async def bulk_retry(
+    body: BulkIdsRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    result = BulkOpResult()
+    pool = request.app.state.arq_pool
+    for item_id in body.ids:
+        try:
+            item = await db.get(RawItem, item_id)
+            if not item:
+                result.failed.append(BulkOpError(id=str(item_id), error="not_found"))
+                continue
+            if item.status == "processing":
+                result.failed.append(BulkOpError(id=str(item_id), error="already_processing"))
+                continue
+            item.status = "pending"
+            item.error_message = None
+            item.processing_started_at = None
+            item.processed_at = None
+            await db.flush()
+            await pool.enqueue_job("process_item", str(item_id))
+            result.succeeded.append(item_id)
+        except Exception as e:
+            result.failed.append(BulkOpError(id=str(item_id), error=str(e)))
+    return result
+
+
+@router.post("/bulk/delete", response_model=BulkOpResult)
+async def bulk_delete(
+    body: BulkIdsRequest,
+    db: AsyncSession = Depends(get_db),
+    files: FileStore = Depends(get_files),
+    _auth: str = Depends(verify_auth),
+):
+    result = BulkOpResult()
+    for item_id in body.ids:
+        try:
+            item = await db.get(RawItem, item_id)
+            if not item:
+                result.failed.append(BulkOpError(id=str(item_id), error="not_found"))
+                continue
+            stored_path = item.file_path
+            if stored_path:
+                try:
+                    await files.delete(stored_path)
+                except Exception as e:
+                    logger.warning(f"Failed to delete file {stored_path}: {e}")
+            await db.delete(item)
+            await db.flush()
+            result.succeeded.append(item_id)
+        except Exception as e:
+            result.failed.append(BulkOpError(id=str(item_id), error=str(e)))
+    return result
+
+
+_DOC_TYPES = {"pdf", "docx", "xlsx", "pptx", "epub", "html"}
+
+
+def _type_bucket(content_type: str | None) -> str:
+    if not content_type:
+        return "text"
+    if content_type in _DOC_TYPES or content_type == "file":
+        return "documents"
+    if content_type == "image":
+        return "images"
+    if content_type in ("audio", "voice"):
+        return "audio"
+    if content_type == "video":
+        return "video"
+    if content_type == "url":
+        return "links"
+    return "text"
+
+
+@router.get("/library/stats", response_model=LibraryStatsResponse)
+async def library_stats(
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    # Totals by status
+    status_rows = (
+        await db.execute(select(RawItem.status, func.count(RawItem.id)).group_by(RawItem.status))
+    ).all()
+    totals = {"all": 0, "recent": 0, "pending": 0, "processing": 0, "done": 0, "error": 0}
+    for status, count in status_rows:
+        totals[status] = count
+        totals["all"] += count
+
+    # Recent (last 24h)
+    recent_row = (
+        await db.execute(
+            select(func.count(RawItem.id)).where(
+                RawItem.created_at >= func.now() - text("interval '24 hours'")
+            )
+        )
+    ).scalar()
+    totals["recent"] = recent_row or 0
+
+    # Projects (user_project, skip null)
+    project_rows = (
+        await db.execute(
+            select(RawItem.user_project, func.count(RawItem.id))
+            .where(RawItem.user_project.isnot(None))
+            .group_by(RawItem.user_project)
+            .order_by(func.count(RawItem.id).desc())
+        )
+    ).all()
+    projects = [CountItem(key=p, count=c) for p, c in project_rows]
+
+    # Unassigned project count
+    unassigned = (
+        await db.execute(select(func.count(RawItem.id)).where(RawItem.user_project.is_(None)))
+    ).scalar()
+    if unassigned:
+        projects.append(CountItem(key="(Unassigned)", count=unassigned))
+
+    # Types (bucket content_types)
+    type_rows = (
+        await db.execute(select(RawItem.content_type, func.count(RawItem.id)).group_by(RawItem.content_type))
+    ).all()
+    buckets: dict[str, int] = {}
+    for ct, count in type_rows:
+        bucket = _type_bucket(ct)
+        buckets[bucket] = buckets.get(bucket, 0) + count
+    types = [CountItem(key=k, count=v) for k, v in sorted(buckets.items())]
+
+    # Sources
+    source_rows = (
+        await db.execute(
+            select(RawItem.source_channel, func.count(RawItem.id))
+            .where(RawItem.source_channel.isnot(None))
+            .group_by(RawItem.source_channel)
+            .order_by(func.count(RawItem.id).desc())
+        )
+    ).all()
+    sources = [CountItem(key=s, count=c) for s, c in source_rows]
+
+    return LibraryStatsResponse(totals=totals, projects=projects, types=types, sources=sources)
+
+
+# --- Parameterized routes (/{item_id} and sub-paths) ---
 
 
 @router.get("/{item_id}", response_model=ItemDetailResponse)
