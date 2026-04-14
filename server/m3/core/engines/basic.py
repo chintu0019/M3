@@ -66,6 +66,7 @@ class BasicEngine(CompilationEngine):
         existing_projects: list[str],
         user_tags: list[str] | None = None,
         user_project: str | None = None,
+        user_notes: str | None = None,
     ) -> Classification:
         system = """You are the classification engine for M3, a personal knowledge system.
 Your job is to analyze incoming content and classify it.
@@ -77,8 +78,11 @@ Rules:
 - Identify named entities: people, companies, concepts, places
 - Assign a confidence score (0.0-1.0) based on how well you understand the content
 - content_type should describe what the content IS: decision, idea, meeting, receipt, reading, person, project-overview, concept, learning, bookmark, quote, etc.
+- If the user has provided notes, treat them as authoritative corrections or additional context. They override conflicting information in the content.
 
 Respond with JSON only."""
+
+        notes_block = f"\n\nUser-provided notes (corrections and additional context):\n{user_notes}" if user_notes else ""
 
         user_msg = f"""Classify this content:
 
@@ -95,7 +99,7 @@ Current wiki schema:
 Existing tags: {json.dumps(existing_tags) if existing_tags else "[]"}
 Existing projects: {json.dumps(existing_projects) if existing_projects else "[]"}
 User-provided tags: {json.dumps(user_tags) if user_tags else "[]"}
-User-provided project: {user_project or "(none)"}
+User-provided project: {user_project or "(none)"}{notes_block}
 
 Return JSON:
 {{
@@ -129,6 +133,7 @@ Return JSON:
         original_content: str,
         related_pages: list[dict],
         wiki_schema: str,
+        user_notes: str | None = None,
     ) -> CompileResult:
         system = """You are the wiki compilation engine for M3, a personal knowledge system.
 Your job is to take classified content and produce wiki page updates.
@@ -141,6 +146,7 @@ Rules:
 - Each page should have a clear title, category, and type.
 - Tags should be specific and useful for filtering.
 - link_type can be: references, contradicts, extends, related
+- If the user has provided notes, treat them as authoritative. Incorporate their corrections and context into the wiki content.
 
 Respond with JSON only."""
 
@@ -151,6 +157,8 @@ Respond with JSON only."""
                 related_ctx += f"\n--- Page: {p['title']} (ID: {p['id']}) ---\n"
                 related_ctx += f"Category: {p.get('category', 'none')}\n"
                 related_ctx += f"Content:\n{p['content'][:2000]}\n"
+
+        notes_block = f"\n\nUser-provided notes (corrections and additional context):\n{user_notes}" if user_notes else ""
 
         user_msg = f"""Compile this classified content into wiki page updates:
 
@@ -166,7 +174,7 @@ Original content:
 
 Wiki schema:
 {wiki_schema or "(no schema yet)"}
-{related_ctx}
+{related_ctx}{notes_block}
 
 Return JSON:
 {{
