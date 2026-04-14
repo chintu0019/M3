@@ -8,8 +8,6 @@ Both routers mount under /api/v1/ingest.
 import logging
 import uuid
 
-from arq import create_pool
-from arq.connections import RedisSettings
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,12 +115,23 @@ async def patch_item(
         item.user_tags = body.user_tags
     if body.user_project is not None:
         item.user_project = body.user_project or None
-    if body.filename is not None and item.file_path:
-        # Rename the MinIO object by moving the prefix segment to a new name.
-        # Keep the `raw/{item_id}/` prefix, change the trailing filename.
-        parts = item.file_path.split("/")
-        parts[-1] = body.filename
-        item.file_path = "/".join(parts)
+    if body.filename is not None:
+        fname = body.filename.strip()
+        if not fname:
+            raise HTTPException(status_code=400, detail="filename cannot be empty")
+        if "/" in fname:
+            raise HTTPException(status_code=400, detail="filename cannot contain '/'")
+        if item.file_path:
+            parts = item.file_path.split("/")
+            old_path = item.file_path
+            parts[-1] = fname
+            new_path = "/".join(parts)
+            try:
+                await files.rename(old_path, new_path)
+            except Exception as e:
+                logger.error(f"MinIO rename failed {old_path} -> {new_path}: {e}")
+                raise HTTPException(status_code=500, detail="File rename failed; database not updated")
+            item.file_path = new_path
 
     await db.flush()
     return await _build_detail_response(item, db, files)
@@ -141,25 +150,18 @@ async def delete_item(
 
     stored_path = item.file_path
 
-    # Cascade deletes notes (via FK). Wiki pages referenced via source_items are not removed --
-    # they may still be useful to the wiki and refer to the item id only.
-    await db.delete(item)
-    await db.flush()
-
     if stored_path:
         try:
             await files.delete(stored_path)
         except Exception as e:
-            logger.warning(f"Failed to delete file {stored_path}: {e}")
+            # If the file is already gone from MinIO (e.g. eventual consistency),
+            # continue so users aren't blocked from cleaning up stale DB rows.
+            logger.warning(f"MinIO delete failed for {stored_path}: {e}")
 
-
-def _redis_settings(url: str) -> RedisSettings:
-    if url.startswith("redis://"):
-        parts = url.replace("redis://", "").split(":")
-        host = parts[0]
-        port = int(parts[1].split("/")[0]) if len(parts) > 1 else 6379
-        return RedisSettings(host=host, port=port)
-    return RedisSettings()
+    # Cascade deletes notes (via FK). Wiki pages referenced via source_items are not removed --
+    # they may still be useful to the wiki and refer to the item id only.
+    await db.delete(item)
+    await db.flush()
 
 
 @router.post("/{item_id}/retry", response_model=ItemDetailResponse)

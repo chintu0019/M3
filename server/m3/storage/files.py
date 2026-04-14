@@ -9,6 +9,7 @@ import io
 from datetime import timedelta
 
 from minio import Minio
+from minio.commonconfig import CopySource
 
 from m3.config import StorageSettings
 
@@ -55,6 +56,16 @@ class FileStore:
         return await asyncio.to_thread(
             self.client.presigned_get_object, self.bucket, path, expires=expires
         )
+
+    async def rename(self, old_path: str, new_path: str) -> None:
+        """Rename a file by copying to the new key then deleting the old one."""
+        await asyncio.to_thread(
+            self.client.copy_object,
+            self.bucket,
+            new_path,
+            CopySource(self.bucket, old_path),
+        )
+        await asyncio.to_thread(self.client.remove_object, self.bucket, old_path)
 
     async def delete(self, path: str) -> None:
         """Delete a file."""
