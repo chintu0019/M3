@@ -1,0 +1,48 @@
+[project]
+name = "m3"
+version = "0.1.0"
+description = "M3 - Personal Knowledge Operating System"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3",
+    "anthropic>=0.42",
+    "openai>=1.60",
+    "fastembed>=0.4",
+    "arq>=0.26",
+    "minio>=7.2",
+    "python-telegram-bot>=21.0",
+    "trafilatura>=1.12",
+    "pdfplumber>=0.11",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "httpx>=0.28",
+    "redis>=5.2",
+    "python-multipart>=0.0.18",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+m3-server = "m3.main:run"
+m3-worker = "m3.workers.run:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["m3*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100

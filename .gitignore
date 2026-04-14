@@ -1,0 +1,29 @@
+# Environment
+.env
+config.yml
+*.pyc
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Node
+node_modules/
+client/dist/
+
+# Python
+*.egg
+dist/
+build/
+
+# Data volumes
+pg_data/
+redis_data/
+minio_data/

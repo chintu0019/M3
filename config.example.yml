@@ -1,0 +1,66 @@
+# M3 Configuration
+# Copy to config.yml and fill in your values.
+# Environment variables override these (M3_ prefix, __ for nesting).
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+database:
+  url: postgresql+asyncpg://m3:m3dev@postgres:5432/m3
+
+storage:
+  endpoint: minio:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  bucket: m3-data
+  secure: false
+
+redis:
+  url: redis://redis:6379
+
+llm:
+  default_provider: minimax  # Which provider to use: minimax, claude, openrouter, groq, ollama, etc.
+  providers:
+    minimax:
+      type: openai_compatible
+      api_key: ""  # Set via MINIMAX_API_KEY env var
+      model: MiniMax-M1
+      base_url: https://api.minimaxi.chat/v1
+    claude:
+      type: anthropic
+      api_key: ""  # Set via ANTHROPIC_API_KEY env var
+      model: claude-sonnet-4-20250514
+    openrouter:
+      type: openai_compatible
+      api_key: ""  # Set via OPENROUTER_API_KEY env var
+      model: anthropic/claude-sonnet-4  # Or any model on OpenRouter
+      base_url: https://openrouter.ai/api/v1
+    groq:
+      type: openai_compatible
+      api_key: ""
+      model: llama-3.3-70b-versatile
+      base_url: https://api.groq.com/openai/v1
+    ollama:
+      type: openai_compatible
+      api_key: unused
+      model: llama3.1:70b
+      base_url: http://localhost:11434/v1
+  embedding:
+    provider: fastembed
+    model: nomic-ai/nomic-embed-text-v1.5
+    dimensions: 768
+
+processing:
+  engine: basic
+  # engine_path: /path/to/custom/engine.py  # For custom engines
+  auto_compile: true
+  compile_interval_minutes: 60
+
+capture:
+  telegram:
+    enabled: false
+    bot_token: ""  # Set via TELEGRAM_BOT_TOKEN env var
+
+auth:
+  api_key: ""  # Set via M3_API_KEY env var
