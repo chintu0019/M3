@@ -29,7 +29,7 @@ async def list_pages(
     category: str | None = Query(None),
     page_type: str | None = Query(None),
     tags: str | None = Query(None, description="Comma-separated tags"),
-    sort_by: str = Query("updated_at", regex="^(updated_at|created_at|title)$"),
+    sort_by: str = Query("updated_at", pattern="^(updated_at|created_at|title)$"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),

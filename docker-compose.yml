@@ -25,7 +25,7 @@ services:
       timeout: 3s
       retries: 5
     ports:
-      - "6379:6379"
+      - "6380:6379"
 
   minio:
     image: minio/minio
@@ -60,8 +60,6 @@ services:
       M3_STORAGE__SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
       M3_REDIS__URL: "redis://redis:6379"
       M3_AUTH__API_KEY: "${M3_API_KEY:-dev-key}"
-      M3_LLM__PROVIDERS__CLAUDE__API_KEY: "${ANTHROPIC_API_KEY:-}"
-      M3_LLM__PROVIDERS__MINIMAX__API_KEY: "${MINIMAX_API_KEY:-}"
       M3_CAPTURE__TELEGRAM__BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
     volumes:
       - fastembed_cache:/root/.cache/fastembed
@@ -86,8 +84,6 @@ services:
       M3_STORAGE__SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
       M3_REDIS__URL: "redis://redis:6379"
       M3_AUTH__API_KEY: "${M3_API_KEY:-dev-key}"
-      M3_LLM__PROVIDERS__CLAUDE__API_KEY: "${ANTHROPIC_API_KEY:-}"
-      M3_LLM__PROVIDERS__MINIMAX__API_KEY: "${MINIMAX_API_KEY:-}"
     volumes:
       - fastembed_cache:/root/.cache/fastembed
       - m3_data:/data
