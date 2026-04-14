@@ -1,3 +1,7 @@
+# Git strategy - must follow
+
+Every commit should always have descriptions of what changes are being made, why we are making those changes, core decisions etc.
+
 # M3 Build Instructions
 
 Read `docs/PRODUCT_SPEC.md` for full product context. This file tells you how to build Phase 1.

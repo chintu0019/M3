@@ -42,6 +42,7 @@ class RawItemResponse(BaseModel):
     status: str
     error_message: str | None
     created_at: datetime
+    processing_started_at: datetime | None = None
     processed_at: datetime | None
 
 
@@ -116,6 +117,68 @@ class ChangelogResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
+
+
+# --- Library (detail, notes, bulk, stats) ---
+
+
+class ItemNoteResponse(BaseModel):
+    id: uuid.UUID
+    item_id: uuid.UUID
+    content: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ItemNoteCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=10000)
+
+
+class ItemNoteUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=10000)
+
+
+class WikiPageLinkedToItem(BaseModel):
+    id: uuid.UUID
+    title: str
+    category: str | None
+    page_type: str | None
+    tags: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    updated_at: datetime
+
+
+class ItemDetailResponse(RawItemResponse):
+    processing_started_at: datetime | None = None
+    notes: list[ItemNoteResponse] = Field(default_factory=list)
+    linked_wiki_pages: list[WikiPageLinkedToItem] = Field(default_factory=list)
+
+
+class ItemPatchRequest(BaseModel):
+    filename: str | None = None
+    user_tags: list[str] | None = None
+    user_project: str | None = None
+
+
+class BulkIdsRequest(BaseModel):
+    ids: list[uuid.UUID]
+
+
+class BulkOpResult(BaseModel):
+    succeeded: list[uuid.UUID] = Field(default_factory=list)
+    failed: list[dict] = Field(default_factory=list)  # {"id": uuid, "error": str}
+
+
+class CountItem(BaseModel):
+    key: str
+    count: int
+
+
+class LibraryStatsResponse(BaseModel):
+    totals: dict[str, int]  # keys: all, recent, pending, processing, done, error
+    projects: list[CountItem]
+    types: list[CountItem]
+    sources: list[CountItem]
 
 
 # --- Generic ---

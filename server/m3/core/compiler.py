@@ -13,7 +13,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from m3.core.engines.base import CompilationEngine, ContentType
-from m3.core.extractors import extract_pdf, extract_url
+from m3.core.extractors import (
+    extract_by_filename,
+    extract_docx,
+    extract_epub,
+    extract_html,
+    extract_pdf,
+    extract_pptx,
+    extract_url,
+    extract_xlsx,
+)
 from m3.core.llm import EmbeddingProvider, LLMProvider, make_content_blocks
 from m3.storage.files import FileStore
 from m3.storage.models import Changelog, RawItem, WikiLink, WikiPage, WikiSchema
@@ -220,6 +229,36 @@ class Compiler:
         if item.content_type == "pdf" and item.file_path:
             pdf_bytes = await self.files.download(item.file_path)
             return await extract_pdf(pdf_bytes)
+
+        if item.content_type == "docx" and item.file_path:
+            docx_bytes = await self.files.download(item.file_path)
+            return await extract_docx(docx_bytes)
+
+        if item.content_type == "xlsx" and item.file_path:
+            xlsx_bytes = await self.files.download(item.file_path)
+            return await extract_xlsx(xlsx_bytes)
+
+        if item.content_type == "pptx" and item.file_path:
+            pptx_bytes = await self.files.download(item.file_path)
+            return await extract_pptx(pptx_bytes)
+
+        if item.content_type == "epub" and item.file_path:
+            epub_bytes = await self.files.download(item.file_path)
+            return await extract_epub(epub_bytes)
+
+        if item.content_type == "html" and item.file_path:
+            html_bytes = await self.files.download(item.file_path)
+            return await extract_html(html_bytes)
+
+        if item.content_type == "file" and item.file_path:
+            # Generic file -- dispatch by extension
+            file_bytes = await self.files.download(item.file_path)
+            filename = item.file_path.rsplit("/", 1)[-1]
+            extracted = await extract_by_filename(file_bytes, filename)
+            if extracted:
+                return extracted
+            # Fallback to any user-provided text
+            return item.content_text or ""
 
         if item.content_type == "image" and item.file_path:
             image_bytes = await self.files.download(item.file_path)

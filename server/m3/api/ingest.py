@@ -16,8 +16,22 @@ from m3.storage.models import RawItem
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 
 
-def _content_type_from_mime(mime: str) -> str:
-    """Map MIME type to M3 content type."""
+_EXT_TO_TYPE = {
+    ".pdf": "pdf",
+    ".docx": "docx",
+    ".doc": "docx",
+    ".xlsx": "xlsx",
+    ".xls": "xlsx",
+    ".pptx": "pptx",
+    ".ppt": "pptx",
+    ".epub": "epub",
+    ".html": "html",
+    ".htm": "html",
+}
+
+
+def _content_type_from_mime(mime: str, filename: str | None = None) -> str:
+    """Map MIME type (with filename fallback) to M3 content type."""
     if mime.startswith("image/"):
         return "image"
     if mime.startswith("audio/"):
@@ -26,6 +40,33 @@ def _content_type_from_mime(mime: str) -> str:
         return "video"
     if mime == "application/pdf":
         return "pdf"
+    if mime in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    ):
+        return "docx"
+    if mime in (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+    ):
+        return "xlsx"
+    if mime in (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-powerpoint",
+    ):
+        return "pptx"
+    if mime == "application/epub+zip":
+        return "epub"
+    if mime in ("text/html", "application/xhtml+xml"):
+        return "html"
+    if mime.startswith("text/"):
+        return "file"
+    # Fallback to extension when MIME is generic
+    if filename:
+        name = filename.lower()
+        for ext, ctype in _EXT_TO_TYPE.items():
+            if name.endswith(ext):
+                return ctype
     return "file"
 
 
@@ -49,7 +90,10 @@ async def ingest_json(
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
     if file:
-        content_type = _content_type_from_mime(file.content_type or "application/octet-stream")
+        content_type = _content_type_from_mime(
+            file.content_type or "application/octet-stream",
+            file.filename,
+        )
         file_data = await file.read()
         file_path = f"raw/{item_id}/{file.filename}"
         await files.upload(file_path, file_data, file.content_type or "application/octet-stream")
