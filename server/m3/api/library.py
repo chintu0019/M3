@@ -192,6 +192,16 @@ async def retry_item(
     return await _build_detail_response(item, db, files)
 
 
+def _note_to_response(note: ItemNote) -> ItemNoteResponse:
+    return ItemNoteResponse(
+        id=note.id,
+        item_id=note.item_id,
+        content=note.content,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )
+
+
 @router.post("/{item_id}/notes", response_model=ItemNoteResponse, status_code=201)
 async def create_note(
     item_id: uuid.UUID,
@@ -206,14 +216,9 @@ async def create_note(
     note = ItemNote(item_id=item_id, content=body.content)
     db.add(note)
     await db.flush()
+    await db.refresh(note)
 
-    return ItemNoteResponse(
-        id=note.id,
-        item_id=note.item_id,
-        content=note.content,
-        created_at=note.created_at,
-        updated_at=note.updated_at,
-    )
+    return _note_to_response(note)
 
 
 @router.patch("/{item_id}/notes/{note_id}", response_model=ItemNoteResponse)
@@ -232,13 +237,7 @@ async def update_note(
     await db.flush()
     await db.refresh(note)
 
-    return ItemNoteResponse(
-        id=note.id,
-        item_id=note.item_id,
-        content=note.content,
-        created_at=note.created_at,
-        updated_at=note.updated_at,
-    )
+    return _note_to_response(note)
 
 
 @router.delete("/{item_id}/notes/{note_id}", status_code=204)
