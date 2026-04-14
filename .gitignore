@@ -30,3 +30,6 @@ minio_data/
 
 # Brainstorming working dir
 .superpowers/
+
+# Private local notes
+CLAUDE.md
