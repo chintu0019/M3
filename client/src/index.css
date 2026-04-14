@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Markdown content styling */
+.prose h1 { @apply text-2xl font-bold mb-4 mt-6; }
+.prose h2 { @apply text-xl font-semibold mb-3 mt-5; }
+.prose h3 { @apply text-lg font-semibold mb-2 mt-4; }
+.prose p { @apply mb-3 leading-relaxed; }
+.prose ul { @apply list-disc pl-6 mb-3; }
+.prose ol { @apply list-decimal pl-6 mb-3; }
+.prose li { @apply mb-1; }
+.prose code { @apply bg-m3-surface px-1.5 py-0.5 rounded text-sm; }
+.prose pre { @apply bg-m3-surface p-4 rounded-lg overflow-x-auto mb-3; }
+.prose a { @apply text-m3-accent hover:text-m3-accent-hover underline; }
+.prose blockquote { @apply border-l-4 border-m3-border pl-4 italic text-m3-muted; }
