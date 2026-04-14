@@ -145,7 +145,7 @@ async def bulk_delete(
                 try:
                     await files.delete(stored_path)
                 except Exception as e:
-                    logger.warning(f"Failed to delete file {stored_path}: {e}")
+                    logger.warning(f"Failed to delete file for item {item_id} ({stored_path}): {e}")
             await db.delete(item)
             await db.flush()
             result.succeeded.append(item_id)
