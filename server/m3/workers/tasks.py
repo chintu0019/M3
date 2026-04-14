@@ -4,15 +4,17 @@ M3 ARQ Tasks -- background job definitions for the worker.
 
 import logging
 import uuid
+from pathlib import Path
 
 from arq import cron
 
-from m3.config import load_settings
+from m3.config import LLMProviderConfig, load_settings
 from m3.core.compiler import Compiler
 from m3.core.engines.loader import load_engine
 from m3.core.llm import create_embedding_provider, create_llm_provider
 from m3.storage.database import init_db
 from m3.storage.files import FileStore
+from m3.storage.user_settings import UserSettingsStore
 
 logger = logging.getLogger("m3.worker")
 
@@ -40,6 +42,14 @@ async def startup(ctx: dict) -> None:
     """Initialize all dependencies for the worker process."""
     logger.info("Worker starting up...")
     settings = load_settings()
+
+    # Merge user-configured providers (same as server lifespan)
+    user_store = UserSettingsStore(Path(settings.data_dir) / "user_settings.json")
+    for name, provider_data in user_store.get_providers().items():
+        settings.llm.providers[name] = LLMProviderConfig(**provider_data)
+    user_active = user_store.get_active_provider()
+    if user_active and user_active in settings.llm.providers:
+        settings.llm.default_provider = user_active
 
     engine, session_factory = await init_db(settings.database)
     file_store = FileStore(settings.storage)
