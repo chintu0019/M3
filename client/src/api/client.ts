@@ -25,6 +25,8 @@ export interface RawItem {
   content_text: string | null;
   content_type: string | null;
   source_channel: string | null;
+  file_path: string | null;
+  file_url: string | null;
   user_tags: string[];
   user_project: string | null;
   status: string;
