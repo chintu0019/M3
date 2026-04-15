@@ -28,7 +28,7 @@ interface PendingFile {
   error?: string;
 }
 
-export default function Inbox() {
+export default function Library() {
   const [items, setItems] = useState<RawItem[]>([]);
   const [text, setText] = useState("");
   const [tags, setTags] = useState("");

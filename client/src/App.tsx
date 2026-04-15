@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Routes, Route, NavLink } from "react-router-dom";
+import { Navigate, Route, Routes, NavLink } from "react-router-dom";
 import { api } from "./api/client";
-import Inbox from "./views/Inbox";
+import Library from "./views/Library";
+import LibraryDetail from "./views/LibraryDetail";
 import Wiki from "./views/Wiki";
 import Chat from "./views/Chat";
 import Settings from "./views/Settings";
@@ -17,8 +18,8 @@ function Nav({ activeModel }: { activeModel: string | null }) {
   return (
     <nav className="flex items-center gap-2 px-6 py-3 border-b border-m3-border bg-m3-bg">
       <span className="font-bold text-lg mr-6">M3</span>
-      <NavLink to="/" className={linkClass} end>
-        Inbox
+      <NavLink to="/library" className={linkClass}>
+        Library
       </NavLink>
       <NavLink to="/wiki" className={linkClass}>
         Wiki
@@ -57,7 +58,6 @@ export default function App() {
 
   useEffect(() => {
     loadActiveModel();
-    // Re-check periodically in case user switches from Settings page
     const interval = setInterval(loadActiveModel, 10000);
     return () => clearInterval(interval);
   }, [loadActiveModel]);
@@ -67,7 +67,9 @@ export default function App() {
       <Nav activeModel={activeModel} />
       <main className="flex-1">
         <Routes>
-          <Route path="/" element={<Inbox />} />
+          <Route path="/" element={<Navigate to="/library" replace />} />
+          <Route path="/library" element={<Library />} />
+          <Route path="/library/:id" element={<LibraryDetail />} />
           <Route path="/wiki" element={<Wiki />} />
           <Route path="/wiki/:pageId" element={<Wiki />} />
           <Route path="/chat" element={<Chat />} />
