@@ -30,6 +30,7 @@ export interface RawItem {
   status: string;
   error_message: string | null;
   created_at: string;
+  processing_started_at: string | null;
   processed_at: string | null;
 }
 
@@ -57,6 +58,58 @@ export interface SearchResult {
   snippet: string;
   score: number;
   category: string | null;
+}
+
+export interface ItemNote {
+  id: string;
+  item_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LinkedWikiPage {
+  id: string;
+  title: string;
+  category: string | null;
+  page_type: string | null;
+  tags: string[];
+  confidence: number;
+  updated_at: string;
+}
+
+export interface ItemDetail extends RawItem {
+  notes: ItemNote[];
+  linked_wiki_pages: LinkedWikiPage[];
+}
+
+export interface CountItem {
+  key: string;
+  count: number;
+}
+
+export interface LibraryStats {
+  totals: {
+    all: number;
+    recent: number;
+    pending: number;
+    processing: number;
+    done: number;
+    error: number;
+  };
+  projects: CountItem[];
+  types: CountItem[];
+  sources: CountItem[];
+}
+
+export interface BulkOpError {
+  id: string;
+  error: string;
+}
+
+export interface BulkOpResult {
+  succeeded: string[];
+  failed: BulkOpError[];
 }
 
 export interface Paginated<T> {
@@ -127,6 +180,59 @@ export const api = {
         nodes: { id: string; title: string; category: string | null; connection_count: number }[];
         edges: { source_id: string; target_id: string; link_type: string; weight: number }[];
       }>("/api/v1/wiki/graph"),
+  },
+
+  library: {
+    get: (id: string) => request<ItemDetail>(`/api/v1/ingest/${id}`),
+    patch: (id: string, data: { filename?: string; user_tags?: string[]; user_project?: string | null }) =>
+      request<ItemDetail>(`/api/v1/ingest/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetch(`${BASE}/api/v1/ingest/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${localStorage.getItem("m3_api_key") || ""}` },
+      }).then((r) => {
+        if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+      }),
+    retry: (id: string) =>
+      request<ItemDetail>(`/api/v1/ingest/${id}/retry`, { method: "POST" }),
+    notes: {
+      create: (id: string, content: string) =>
+        request<ItemNote>(`/api/v1/ingest/${id}/notes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        }),
+      update: (id: string, noteId: string, content: string) =>
+        request<ItemNote>(`/api/v1/ingest/${id}/notes/${noteId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        }),
+      delete: (id: string, noteId: string) =>
+        fetch(`${BASE}/api/v1/ingest/${id}/notes/${noteId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${localStorage.getItem("m3_api_key") || ""}` },
+        }).then((r) => {
+          if (!r.ok) throw new Error(`Delete note failed: ${r.status}`);
+        }),
+    },
+    bulkRetry: (ids: string[]) =>
+      request<BulkOpResult>(`/api/v1/ingest/bulk/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }),
+    bulkDelete: (ids: string[]) =>
+      request<BulkOpResult>(`/api/v1/ingest/bulk/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }),
+    stats: () => request<LibraryStats>(`/api/v1/ingest/library/stats`),
   },
 
   settings: {
