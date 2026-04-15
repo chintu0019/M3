@@ -4,9 +4,11 @@ M3 ARQ Tasks -- background job definitions for the worker.
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from arq import cron
+from sqlalchemy import or_, update
 
 from m3.config import LLMProviderConfig, load_settings
 from m3.core.compiler import Compiler
@@ -14,7 +16,10 @@ from m3.core.engines.loader import load_engine
 from m3.core.llm import create_embedding_provider, create_llm_provider
 from m3.storage.database import init_db
 from m3.storage.files import FileStore
+from m3.storage.models import RawItem
 from m3.storage.user_settings import UserSettingsStore
+
+STALE_PROCESSING_THRESHOLD = timedelta(minutes=10)
 
 logger = logging.getLogger("m3.worker")
 
@@ -70,6 +75,34 @@ async def startup(ctx: dict) -> None:
     ctx["compiler"] = compiler
     ctx["db_engine"] = engine
     ctx["settings"] = settings
+
+    # Reap zombie 'processing' items from a previous worker that crashed
+    # mid-job. Reset them to 'pending' so the next compile_pass (hourly cron,
+    # or the immediate pass below) picks them up. Two cases caught: items with
+    # no processing_started_at (older data pre-Task 10) and items whose stamp
+    # is older than STALE_PROCESSING_THRESHOLD.
+    cutoff = datetime.now(timezone.utc) - STALE_PROCESSING_THRESHOLD
+    async with session_factory() as session:
+        result = await session.execute(
+            update(RawItem)
+            .where(
+                RawItem.status == "processing",
+                or_(
+                    RawItem.processing_started_at.is_(None),
+                    RawItem.processing_started_at < cutoff,
+                ),
+            )
+            .values(status="pending", processing_started_at=None, processed_at=None)
+        )
+        await session.commit()
+        if result.rowcount:
+            logger.warning(f"Recovered {result.rowcount} zombie processing items")
+
+    # Also run an immediate compile pass so unstuck items (and any backlog
+    # accumulated while the worker was down) start processing right away
+    # rather than waiting up to an hour for the cron.
+    await compiler.run_compile_pass()
+
     logger.info("Worker ready")
 
 
