@@ -63,6 +63,7 @@ class ProcessingSettings(BaseModel):
     engine_path: str | None = None
     auto_compile: bool = True
     compile_interval_minutes: int = 60
+    wiki_mode: str = "document"  # "document" (current) or "entity" (Phase 2+)
 
 
 class TelegramSettings(BaseModel):
