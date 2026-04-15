@@ -25,7 +25,7 @@ from m3.core.extractors import (
 )
 from m3.core.llm import EmbeddingProvider, LLMProvider, make_content_blocks
 from m3.storage.files import FileStore
-from m3.storage.models import Changelog, RawItem, WikiLink, WikiPage, WikiSchema
+from m3.storage.models import Changelog, ItemNote, RawItem, WikiLink, WikiPage, WikiSchema
 
 logger = logging.getLogger("m3.compiler")
 
@@ -55,7 +55,19 @@ class Compiler:
                     return
 
                 item.status = "processing"
+                item.processing_started_at = datetime.now(timezone.utc)
                 await session.commit()
+
+                # Load notes for this item (user corrections / additional context)
+                notes_result = await session.execute(
+                    select(ItemNote).where(ItemNote.item_id == item_id).order_by(ItemNote.created_at)
+                )
+                notes = notes_result.scalars().all()
+                user_notes = None
+                if notes:
+                    user_notes = "\n\n---\n\n".join(
+                        f"Note (added {n.created_at.isoformat()}):\n{n.content}" for n in notes
+                    )
 
                 # 1. Extract content
                 content = await self._extract_content(item)
@@ -86,6 +98,7 @@ class Compiler:
                     existing_projects=existing_projects,
                     user_tags=item.user_tags,
                     user_project=item.user_project,
+                    user_notes=user_notes,
                 )
 
                 # 4. Find related pages
@@ -97,6 +110,7 @@ class Compiler:
                     original_content=content,
                     related_pages=related_pages,
                     wiki_schema=wiki_schema,
+                    user_notes=user_notes,
                 )
 
                 # 6. Write wiki pages
