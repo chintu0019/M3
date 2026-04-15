@@ -79,10 +79,10 @@ export default function Library() {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.ingest.list({ per_page: "200" });
+      const res = await api.ingest.list({ per_page: "100" });
       setItems(res.items);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to load library items:", err);
     }
   }, []);
 
