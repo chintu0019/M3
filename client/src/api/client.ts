@@ -79,6 +79,7 @@ export interface LinkedWikiPage {
 }
 
 export interface ItemDetail extends RawItem {
+  file_url: string | null;
   notes: ItemNote[];
   linked_wiki_pages: LinkedWikiPage[];
 }
