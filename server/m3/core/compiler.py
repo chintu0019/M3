@@ -12,7 +12,19 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from m3.core.engines.base import CompilationEngine, ContentType
+from m3.core.engines.base import (
+    AudioBlock,
+    CompilationEngine,
+    ContentBlock,
+    ContentType,
+    EntityMention,
+    ExtractedFact,
+    ExtractionResult,
+    ImageBlock,
+    ProposedRelationship,
+    TextBlock,
+)
+from m3.core.entity_resolver import resolve as resolve_entity
 from m3.core.extractors import (
     extract_by_filename,
     extract_docx,
@@ -25,7 +37,21 @@ from m3.core.extractors import (
 )
 from m3.core.llm import EmbeddingProvider, LLMProvider, make_content_blocks
 from m3.storage.files import FileStore
-from m3.storage.models import Changelog, ItemNote, RawItem, WikiLink, WikiPage, WikiSchema
+from m3.storage.models import (
+    Changelog,
+    Entity,
+    EntityFact,
+    EntityFactLink,
+    EntityLink,
+    EntityTypeVocab,
+    FactRoleVocab,
+    FactTypeVocab,
+    ItemNote,
+    RawItem,
+    WikiLink,
+    WikiPage,
+    WikiSchema,
+)
 
 logger = logging.getLogger("m3.compiler")
 
@@ -38,12 +64,14 @@ class Compiler:
         engine: CompilationEngine,
         llm: LLMProvider,
         embedder: EmbeddingProvider,
+        wiki_mode: str = "document",
     ):
         self.db = db
         self.files = files
         self.engine = engine
         self.llm = llm
         self.embedder = embedder
+        self.wiki_mode = wiki_mode
 
     async def process_item(self, item_id: uuid.UUID) -> None:
         """Full processing pipeline for a single raw item."""
@@ -69,7 +97,7 @@ class Compiler:
                         f"Note (added {n.created_at.isoformat()}):\n{n.content}" for n in notes
                     )
 
-                # 1. Extract content
+                # 1. Extract content (text form, always) and multimodal blocks
                 content = await self._extract_content(item)
                 if not content:
                     item.status = "error"
@@ -77,68 +105,59 @@ class Compiler:
                     await session.commit()
                     return
 
-                # Store extracted text back on item if it was derived
                 if item.content_text != content:
                     item.content_text = content
 
-                # 2. Get wiki context
-                wiki_index = await self._get_wiki_index(session)
-                wiki_schema = await self._get_wiki_schema(session)
-                existing_tags = await self._get_existing_tags(session)
-                existing_projects = await self._get_existing_projects(session)
-
-                # 3. Classify
-                content_type = ContentType(item.content_type) if item.content_type in ContentType.__members__.values() else ContentType.TEXT
-                classification = await self.engine.classify(
-                    content=content,
-                    content_type=content_type,
-                    wiki_index=wiki_index,
-                    wiki_schema=wiki_schema,
-                    existing_tags=existing_tags,
-                    existing_projects=existing_projects,
-                    user_tags=item.user_tags,
-                    user_project=item.user_project,
-                    user_notes=user_notes,
+                content_type = (
+                    ContentType(item.content_type)
+                    if item.content_type in ContentType.__members__.values()
+                    else ContentType.TEXT
                 )
 
-                # 4. Find related pages
-                related_pages = await self._find_related_pages(session, content)
+                # Build multimodal blocks for engines that can consume them.
+                content_blocks = await self._build_content_blocks(item, content)
 
-                # 5. Compile
-                compile_result = await self.engine.compile(
-                    classified_item=classification,
-                    original_content=content,
-                    related_pages=related_pages,
-                    wiki_schema=wiki_schema,
-                    user_notes=user_notes,
-                )
+                mode = (self.wiki_mode or "document").lower()
+                if mode not in ("document", "entity", "both"):
+                    logger.warning(f"Unknown wiki_mode={mode!r}; falling back to 'document'")
+                    mode = "document"
 
-                # 6. Write wiki pages
-                for page_update in compile_result.pages:
-                    await self._write_page(session, page_update, item.id)
+                changelog_entries: list[str] = []
 
-                # 7. Update links
-                for link_update in compile_result.links:
-                    await self._upsert_link(session, link_update)
+                if mode in ("document", "both"):
+                    try:
+                        entry = await self._run_document_mode(
+                            session, item, content, content_type, user_notes,
+                        )
+                        if entry:
+                            changelog_entries.append(entry)
+                    except Exception:
+                        if mode == "both":
+                            logger.exception("document-mode failed in both mode; continuing")
+                        else:
+                            raise
 
-                # 8. Update wiki index (deterministic)
-                await self._update_wiki_index(session)
+                if mode in ("entity", "both"):
+                    try:
+                        entry = await self._run_entity_mode(
+                            session, item, content, content_blocks, content_type, user_notes,
+                        )
+                        if entry:
+                            changelog_entries.append(entry)
+                    except Exception:
+                        if mode == "both":
+                            logger.exception("entity-mode failed in both mode; continuing")
+                        else:
+                            raise
 
-                # 9. Update schema if needed
-                if compile_result.schema_updates:
-                    session.add(WikiSchema(content=compile_result.schema_updates))
+                for entry in changelog_entries:
+                    session.add(Changelog(action="compiled", description=entry))
 
-                # 10. Log changelog
-                session.add(Changelog(
-                    action="compiled",
-                    description=compile_result.changelog_entry,
-                ))
-
-                # 11. Mark done
+                # Mark done
                 item.status = "done"
                 item.processed_at = datetime.now(timezone.utc)
                 await session.commit()
-                logger.info(f"Processed item {item_id}")
+                logger.info(f"Processed item {item_id} in wiki_mode={mode}")
 
             except Exception as e:
                 await session.rollback()
@@ -232,6 +251,252 @@ class Compiler:
             f"Deep compile complete: {len(synthesis.new_links)} new links, "
             f"{len(synthesis.insights)} insights"
         )
+
+    # --- Mode helpers ---
+
+    async def _run_document_mode(
+        self,
+        session: AsyncSession,
+        item: RawItem,
+        content: str,
+        content_type: ContentType,
+        user_notes: str | None,
+    ) -> str:
+        """Legacy per-item wiki-page compilation path."""
+        wiki_index = await self._get_wiki_index(session)
+        wiki_schema = await self._get_wiki_schema(session)
+        existing_tags = await self._get_existing_tags(session)
+        existing_projects = await self._get_existing_projects(session)
+
+        classification = await self.engine.classify(
+            content=content,
+            content_type=content_type,
+            wiki_index=wiki_index,
+            wiki_schema=wiki_schema,
+            existing_tags=existing_tags,
+            existing_projects=existing_projects,
+            user_tags=item.user_tags,
+            user_project=item.user_project,
+            user_notes=user_notes,
+        )
+        related_pages = await self._find_related_pages(session, content)
+        compile_result = await self.engine.compile(
+            classified_item=classification,
+            original_content=content,
+            related_pages=related_pages,
+            wiki_schema=wiki_schema,
+            user_notes=user_notes,
+        )
+        for pu in compile_result.pages:
+            await self._write_page(session, pu, item.id)
+        for lu in compile_result.links:
+            await self._upsert_link(session, lu)
+        await self._update_wiki_index(session)
+        if compile_result.schema_updates:
+            session.add(WikiSchema(content=compile_result.schema_updates))
+        return compile_result.changelog_entry or "Content compiled"
+
+    async def _run_entity_mode(
+        self,
+        session: AsyncSession,
+        item: RawItem,
+        content: str,
+        content_blocks: list[ContentBlock],
+        content_type: ContentType,
+        user_notes: str | None,
+    ) -> str:
+        """Entity extraction path: facts into entity pages, not summary pages."""
+        capabilities = getattr(self.engine, "capabilities", None)
+        wants_multimodal = bool(capabilities and capabilities.multimodal) and any(
+            isinstance(b, (ImageBlock, AudioBlock)) for b in content_blocks
+        )
+        extract_input: str | list[ContentBlock] = (
+            content_blocks if wants_multimodal else content
+        )
+        try:
+            extraction = await self.engine.extract(
+                content=extract_input, content_type=content_type, user_notes=user_notes,
+            )
+        except NotImplementedError:
+            logger.warning("Engine does not support extract(); skipping entity mode")
+            return ""
+        n = await self._persist_extraction(session, item, extraction)
+        rel_count = len(extraction.relationships or [])
+        return (
+            f"Extracted {len(extraction.entities)} entities, {n} facts, "
+            f"{rel_count} relationships"
+        )
+
+    async def _build_content_blocks(
+        self, item: RawItem, text_content: str,
+    ) -> list[ContentBlock]:
+        """Produce the multimodal ContentBlock list for this item when the
+        underlying LLM is multimodal. For plain-text items we return the text
+        as a single TextBlock so the engine has a consistent input shape."""
+        blocks: list[ContentBlock] = []
+
+        # Image / audio get raw bytes if the LLM is vision/audio-capable.
+        if item.content_type == "image" and item.file_path and self.llm.supports_vision:
+            try:
+                image_bytes = await self.files.download(item.file_path)
+                mime = _guess_image_mime(item.file_path)
+                blocks.append(ImageBlock(image_bytes=image_bytes, media_type=mime))
+            except Exception as e:
+                logger.warning(f"Failed to load image block: {e}")
+
+        if item.content_type in ("audio", "voice") and item.file_path and self.llm.supports_audio:
+            try:
+                audio_bytes = await self.files.download(item.file_path)
+                mime = _guess_audio_mime(item.file_path)
+                blocks.append(AudioBlock(audio_bytes=audio_bytes, media_type=mime))
+            except Exception as e:
+                logger.warning(f"Failed to load audio block: {e}")
+
+        if text_content:
+            blocks.append(TextBlock(text=text_content))
+
+        return blocks
+
+    # --- Entity persistence ---
+
+    async def _persist_extraction(
+        self,
+        session: AsyncSession,
+        item: RawItem,
+        extraction: ExtractionResult,
+    ) -> int:
+        """Write extracted entities, facts, fact-links, and entity_links for
+        one item. Returns the number of facts persisted."""
+        if not extraction.entities and not extraction.facts:
+            return 0
+
+        # 1) Resolve every mention up front so facts can reuse the cache.
+        resolved: dict[tuple[str, str], Entity] = {}
+        for mention in extraction.entities:
+            outcome = await resolve_entity(session, self.embedder, self.llm, mention)
+            key = (mention.canonical_name.lower(), mention.entity_type.lower())
+            resolved[key] = outcome.entity
+            for alias in mention.aliases or []:
+                resolved.setdefault((alias.lower(), mention.entity_type.lower()), outcome.entity)
+            await self._bump_type_vocab(session, EntityTypeVocab, outcome.entity.entity_type)
+
+        # 2) Facts + fact-links.
+        pair_counts: dict[frozenset, int] = {}
+        persisted_facts = 0
+        for ef in extraction.facts:
+            fact_time = _parse_iso_datetime(ef.fact_time_iso)
+
+            fact = EntityFact(
+                content=ef.content,
+                fact_type=ef.fact_type,
+                fact_time=fact_time,
+                source_quote=ef.source_quote,
+                item_id=item.id,
+                confidence=ef.confidence,
+            )
+            session.add(fact)
+            await session.flush()
+            await self._bump_type_vocab(session, FactTypeVocab, ef.fact_type)
+
+            linked_entity_ids: list[uuid.UUID] = []
+            for ref in ef.entity_refs:
+                rname = (ref.get("name") or "").strip()
+                rtype = (ref.get("type") or "topic").strip().lower()
+                role = (ref.get("role") or "subject").strip().lower()
+                if not rname:
+                    continue
+                key = (rname.lower(), rtype)
+                ent = resolved.get(key)
+                if ent is None:
+                    outcome = await resolve_entity(
+                        session, self.embedder, self.llm,
+                        EntityMention(
+                            canonical_name=rname, entity_type=rtype,
+                            aliases=[], description=None,
+                            context=ef.source_quote or ef.content,
+                        ),
+                    )
+                    ent = outcome.entity
+                    resolved[key] = ent
+                    await self._bump_type_vocab(session, EntityTypeVocab, ent.entity_type)
+
+                session.add(EntityFactLink(fact_id=fact.id, entity_id=ent.id, role=role))
+                await self._bump_type_vocab(session, FactRoleVocab, role)
+                ent.page_dirty = True
+                ent.facts_since_render = (ent.facts_since_render or 0) + 1
+                linked_entity_ids.append(ent.id)
+
+            persisted_facts += 1
+
+            # Co-occurrence pairs (fallback graph signal).
+            uniq = list(dict.fromkeys(linked_entity_ids))
+            for i in range(len(uniq)):
+                for j in range(i + 1, len(uniq)):
+                    pair = frozenset({uniq[i], uniq[j]})
+                    pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+        await session.flush()
+
+        # 3) Upsert co-occurrence entity_links.
+        for pair, count in pair_counts.items():
+            a, b = sorted(pair, key=lambda x: str(x))
+            await self._upsert_entity_link(session, a, b, "related", count)
+
+        # 4) Engine-proposed semantic relationships. Resolve names against the
+        # per-item cache; relationships referencing unknown entities are skipped
+        # rather than creating silent new rows.
+        for rel in extraction.relationships or []:
+            src = resolved.get((rel.source_name.lower(), rel.source_type.lower()))
+            tgt = resolved.get((rel.target_name.lower(), rel.target_type.lower()))
+            if src is None or tgt is None or src.id == tgt.id:
+                continue
+            # Canonical ordering for undirected link types; directed types keep
+            # the engine's direction.
+            undirected = rel.link_type in {"related", "contradicts"}
+            if undirected:
+                a, b = sorted([src.id, tgt.id], key=lambda x: str(x))
+            else:
+                a, b = src.id, tgt.id
+            await self._upsert_entity_link(session, a, b, rel.link_type, rel.weight)
+
+        await session.flush()
+        return persisted_facts
+
+    async def _upsert_entity_link(
+        self,
+        session: AsyncSession,
+        source_id: uuid.UUID,
+        target_id: uuid.UUID,
+        link_type: str,
+        weight_delta: int,
+    ) -> None:
+        result = await session.execute(
+            select(EntityLink).where(
+                EntityLink.source_entity_id == source_id,
+                EntityLink.target_entity_id == target_id,
+                EntityLink.link_type == link_type,
+            )
+        )
+        link = result.scalar_one_or_none()
+        if link is None:
+            session.add(EntityLink(
+                source_entity_id=source_id,
+                target_entity_id=target_id,
+                link_type=link_type,
+                weight=weight_delta,
+            ))
+        else:
+            link.weight = (link.weight or 0) + weight_delta
+
+    async def _bump_type_vocab(self, session: AsyncSession, model, name: str) -> None:
+        """Increment usage_count for a type value; insert if missing."""
+        if not name:
+            return
+        stmt = pg_insert(model.__table__).values(name=name, usage_count=1).on_conflict_do_update(
+            index_elements=["name"],
+            set_={"usage_count": model.__table__.c.usage_count + 1},
+        )
+        await session.execute(stmt)
 
     # --- Private helpers ---
 
@@ -516,3 +781,42 @@ class Compiler:
             ))
 
         await session.flush()
+
+
+# --- Module-level helpers ---
+
+
+_IMAGE_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+_AUDIO_MIME_BY_EXT = {
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".mp4": "audio/mp4",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+}
+
+
+def _guess_image_mime(path: str) -> str:
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return _IMAGE_MIME_BY_EXT.get("." + ext, "image/jpeg")
+
+
+def _guess_audio_mime(path: str) -> str:
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return _AUDIO_MIME_BY_EXT.get("." + ext, "audio/mp4")
+
+
+def _parse_iso_datetime(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None

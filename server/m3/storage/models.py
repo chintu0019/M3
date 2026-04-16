@@ -265,6 +265,34 @@ class EntityLink(Base):
     )
 
 
+class _TypeVocabMixin:
+    """Shared column shape for entity_types / fact_types / fact_roles."""
+
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    usage_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    parent_type: Mapped[str | None] = mapped_column(String(100))
+    merged_into: Mapped[str | None] = mapped_column(String(100), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class EntityTypeVocab(_TypeVocabMixin, Base):
+    __tablename__ = "entity_types"
+
+
+class FactTypeVocab(_TypeVocabMixin, Base):
+    __tablename__ = "fact_types"
+
+
+class FactRoleVocab(_TypeVocabMixin, Base):
+    __tablename__ = "fact_roles"
+
+
 class Insight(Base):
     __tablename__ = "insights"
 

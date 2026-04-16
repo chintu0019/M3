@@ -9,18 +9,136 @@ import logging
 import re
 
 from m3.core.engines.base import (
+    AudioBlock,
     Classification,
     CompilationEngine,
     CompileResult,
+    ContentBlock,
     ContentType,
+    EngineCapabilities,
+    EntityMention,
+    ExtractedFact,
+    ExtractionResult,
+    ImageBlock,
     Insight,
     LinkUpdate,
     PageUpdate,
+    ProposedRelationship,
     SynthesisResult,
+    TextBlock,
+    content_to_text,
 )
-from m3.core.llm import LLMProvider
+from m3.core.llm import LLMProvider, Tool
 
 logger = logging.getLogger("m3.engine.basic")
+
+
+# Suggested vocabularies. The extractor hints these to the model but never
+# enforces them — migration 004 dropped all check constraints and added a
+# `consolidate_types` pass for reconciling drift.
+SUGGESTED_ENTITY_TYPES = [
+    "person", "project", "company", "concept", "place", "event", "topic",
+]
+SUGGESTED_FACT_TYPES = [
+    "claim", "decision", "event", "question", "preference", "definition", "attribution",
+]
+SUGGESTED_ROLES = [
+    "subject", "mentioned", "attributed_to", "location", "time",
+]
+
+
+# Single-call tool schema for capable engines. The schema is permissive on
+# strings so the model can invent new types; the downstream compiler keeps
+# the dim tables in sync.
+EXTRACT_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "description": "Every named entity the content mentions. Do not invent any.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "canonical_name": {"type": "string"},
+                    "entity_type": {
+                        "type": "string",
+                        "description": (
+                            "Suggested: person, project, company, concept, place, event, topic. "
+                            "Invent a new type only if none of these fit."
+                        ),
+                    },
+                    "aliases": {"type": "array", "items": {"type": "string"}},
+                    "description": {"type": ["string", "null"]},
+                    "context": {
+                        "type": ["string", "null"],
+                        "description": "~20 words from the content that mention this entity.",
+                    },
+                },
+                "required": ["canonical_name", "entity_type"],
+            },
+        },
+        "facts": {
+            "type": "array",
+            "description": "Atomic one-sentence claims. Each fact must ground in the content.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "One-sentence claim."},
+                    "fact_type": {
+                        "type": "string",
+                        "description": (
+                            "Suggested: claim, decision, event, question, preference, "
+                            "definition, attribution. Use 'attribution' for 'X said Y'."
+                        ),
+                    },
+                    "entity_refs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "type": {"type": "string"},
+                                "role": {
+                                    "type": "string",
+                                    "description": "subject, mentioned, attributed_to, location, time, or invent.",
+                                },
+                            },
+                            "required": ["name", "type", "role"],
+                        },
+                    },
+                    "fact_time_iso": {"type": ["string", "null"]},
+                    "source_quote": {
+                        "type": ["string", "null"],
+                        "description": "Verbatim span <=200 chars from content if possible.",
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["content", "fact_type", "entity_refs"],
+            },
+        },
+        "relationships": {
+            "type": "array",
+            "description": (
+                "Semantic edges between the extracted entities (beyond bare "
+                "co-occurrence). Examples: project depends_on concept, "
+                "person works_on project, idea extends idea."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_name": {"type": "string"},
+                    "source_type": {"type": "string"},
+                    "target_name": {"type": "string"},
+                    "target_type": {"type": "string"},
+                    "link_type": {"type": "string"},
+                    "rationale": {"type": ["string", "null"]},
+                },
+                "required": ["source_name", "source_type", "target_name", "target_type", "link_type"],
+            },
+        },
+    },
+    "required": ["entities", "facts"],
+}
 
 
 def _parse_json(text: str) -> dict:
@@ -55,6 +173,13 @@ def _parse_json(text: str) -> dict:
 class BasicEngine(CompilationEngine):
     def __init__(self, llm: LLMProvider):
         self.llm = llm
+        self.capabilities = EngineCapabilities(
+            single_call_extract=bool(llm.supports_tools),
+            native_structured_output=bool(llm.supports_tools),
+            multimodal=bool(llm.supports_vision),
+            emits_relationships=bool(llm.supports_tools),
+            inline_rendering=False,
+        )
 
     async def classify(
         self,
@@ -333,3 +458,338 @@ Return JSON:
             schema_updates=data.get("schema_updates"),
             changelog_entries=data.get("changelog_entries", []),
         )
+
+    # --- Entity-centric extract ---
+
+    async def extract(
+        self,
+        content: str | list[ContentBlock],
+        content_type: ContentType,
+        user_notes: str | None = None,
+    ) -> ExtractionResult:
+        """Capable path (tool use, one rich call) when the provider supports
+        tools; text-only two-call JSON-repair fallback otherwise.
+
+        Both paths return the same ExtractionResult shape so the compiler is
+        ignorant of which ran.
+        """
+        if self.llm.supports_tools:
+            try:
+                return await self._extract_capable(content, content_type, user_notes)
+            except Exception as e:
+                logger.warning(f"Capable extract failed, falling back: {e}")
+                # Fall through to text-only path
+
+        return await self._extract_fallback(content, content_type, user_notes)
+
+    async def _extract_capable(
+        self,
+        content: str | list[ContentBlock],
+        content_type: ContentType,
+        user_notes: str | None,
+    ) -> ExtractionResult:
+        """One tool-use call that returns entities, facts, and relationships
+        in a schema-validated JSON payload. No char cap on text; capable
+        providers have enough context window to consume the full item."""
+
+        system = (
+            "You are the extraction engine for M3, a personal knowledge OS. "
+            "Given a raw item (text, and possibly images or audio), extract: "
+            "(a) every named entity the content mentions, "
+            "(b) atomic one-sentence facts grounded in the content, "
+            "(c) semantic relationships between entities where the content "
+            "makes the relationship explicit (e.g. 'Kato depends on the "
+            "public API', 'John works on Kato').\n\n"
+            "STRICT RULES — never break these:\n"
+            "- Never invent entities or facts that aren't supported by the content.\n"
+            "- For 'X said Y' statements use fact_type='attribution' and set "
+            "role='attributed_to' on X; don't present Y as fact.\n"
+            "- source_quote should be verbatim when you can; paraphrase only "
+            "when quoting would be unhelpful.\n"
+            "- Types are suggestions, not walls — invent new types only when "
+            "none of the suggested ones fit.\n"
+            "- Call the extract_knowledge tool exactly once with your output. "
+            "Do not reply with prose."
+            + (
+                "\n\nUser-provided notes override conflicting information in "
+                "the content: " + user_notes
+                if user_notes else ""
+            )
+        )
+
+        user_blocks = self._content_to_message_blocks(content, content_type)
+
+        tool = Tool(
+            name="extract_knowledge",
+            description=(
+                "Emit the structured knowledge extracted from this item: "
+                "entities, facts with entity references, and any explicit "
+                "semantic relationships between entities."
+            ),
+            input_schema=EXTRACT_TOOL_SCHEMA,
+        )
+        result = await self.llm.complete_tool(
+            messages=[{"role": "user", "content": user_blocks}],
+            tools=[tool],
+            system=system,
+            tool_choice="extract_knowledge",
+            max_tokens=8192,
+            temperature=0.2,
+        )
+
+        data = result.input or {}
+        return self._normalize_extraction(data)
+
+    def _content_to_message_blocks(
+        self, content: str | list[ContentBlock], content_type: ContentType,
+    ) -> list[dict]:
+        """Turn the engine's ContentBlock input into Anthropic/OpenAI-style
+        message content blocks. Falls back to text if the engine is not
+        multimodal."""
+        import base64
+
+        if isinstance(content, str):
+            return [{"type": "text", "text": f"Content type: {content_type.value}\n\n{content}"}]
+
+        blocks: list[dict] = [{"type": "text", "text": f"Content type: {content_type.value}"}]
+        for item in content:
+            if isinstance(item, TextBlock):
+                blocks.append({"type": "text", "text": item.text})
+            elif isinstance(item, ImageBlock) and self.capabilities.multimodal:
+                blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": item.media_type,
+                        "data": base64.b64encode(item.image_bytes).decode(),
+                    },
+                })
+            elif isinstance(item, AudioBlock) and self.capabilities.multimodal:
+                blocks.append({
+                    "type": "audio",
+                    "source": {
+                        "type": "base64",
+                        "media_type": item.media_type,
+                        "data": base64.b64encode(item.audio_bytes).decode(),
+                    },
+                })
+            else:
+                # Block type we can't consume — note it so the model knows
+                # something was dropped.
+                blocks.append({"type": "text", "text": "[media omitted]"})
+        return blocks
+
+    async def _extract_fallback(
+        self,
+        content: str | list[ContentBlock],
+        content_type: ContentType,
+        user_notes: str | None,
+    ) -> ExtractionResult:
+        """Two short LLM calls (entities, then facts) with manual JSON repair.
+        No relationships — local models are unreliable enough that keeping
+        the schema tight is worth the missing information."""
+        text_content = content_to_text(content)
+
+        notes_block = (
+            f"\n\nUser-provided notes (corrections and additional context):\n{user_notes}"
+            if user_notes else ""
+        )
+
+        entities_system = (
+            "You are the entity extractor for M3, a personal knowledge system. "
+            "List every NAMED entity the content mentions. Suggested types: "
+            + ", ".join(SUGGESTED_ENTITY_TYPES) + ". Never invent entities not "
+            "in the text. Reply with JSON only."
+        )
+        entities_schema = (
+            '{"entities":[{"canonical_name":"...","entity_type":"...","aliases":["..."],'
+            '"description":"... or null","context":"~20 words from the content"}]}'
+        )
+        entities_user = (
+            f"Content (content_type: {content_type.value}):\n---\n{text_content[:6000]}\n---"
+            f"{notes_block}\n\nList the entities. Schema:\n{entities_schema}"
+        )
+        try:
+            entities_data = await _llm_json_with_repair(
+                self.llm, entities_system, entities_user,
+                max_tokens=1500, temperature=0.2, schema_hint=entities_schema,
+            )
+        except Exception as e:
+            logger.warning(f"Fallback entity extraction failed: {e}")
+            return ExtractionResult(entities=[], facts=[])
+
+        entities = self._normalize_entities(_unwrap(entities_data, "entities"))
+        if not entities:
+            return ExtractionResult(entities=[], facts=[])
+
+        entity_list_for_prompt = "\n".join(
+            f"- {em.canonical_name} ({em.entity_type})"
+            + (f" aka: {', '.join(em.aliases)}" if em.aliases else "")
+            for em in entities
+        )
+        facts_system = (
+            "You are the fact extractor for M3. For each atomic claim in the "
+            "content, emit one fact grounded in the source. Suggested fact_types: "
+            + ", ".join(SUGGESTED_FACT_TYPES) + ". Suggested roles: "
+            + ", ".join(SUGGESTED_ROLES) + ". Reply with JSON only."
+        )
+        facts_schema = (
+            '{"facts":[{"content":"one-sentence claim","fact_type":"...",'
+            '"entity_refs":[{"name":"...","type":"...","role":"..."}],'
+            '"fact_time_iso":"YYYY-MM-DD or null","source_quote":"verbatim span or null",'
+            '"confidence":0.0}]}'
+        )
+        facts_user = (
+            f"KNOWN ENTITIES:\n{entity_list_for_prompt}\n\n"
+            f"CONTENT (content_type: {content_type.value}):\n---\n{text_content[:6000]}\n---"
+            f"{notes_block}\n\nEmit facts. Schema:\n{facts_schema}"
+        )
+        try:
+            facts_data = await _llm_json_with_repair(
+                self.llm, facts_system, facts_user,
+                max_tokens=2500, temperature=0.2, schema_hint=facts_schema,
+            )
+        except Exception as e:
+            logger.warning(f"Fallback fact extraction failed: {e}")
+            return ExtractionResult(entities=entities, facts=[])
+
+        facts = self._normalize_facts(_unwrap(facts_data, "facts"))
+        return ExtractionResult(entities=entities, facts=facts, relationships=[])
+
+    # --- Shared normalisation ---
+
+    def _normalize_extraction(self, data: dict) -> ExtractionResult:
+        entities = self._normalize_entities(_unwrap(data, "entities"))
+        facts = self._normalize_facts(_unwrap(data, "facts"))
+        relationships = self._normalize_relationships(_unwrap(data, "relationships"))
+        return ExtractionResult(entities=entities, facts=facts, relationships=relationships)
+
+    def _normalize_entities(self, raw: list[dict]) -> list[EntityMention]:
+        out: list[EntityMention] = []
+        seen: set[tuple[str, str]] = set()
+        for e in raw:
+            name = (e.get("canonical_name") or "").strip()
+            etype = (e.get("entity_type") or "").strip().lower() or "topic"
+            if not name:
+                continue
+            key = (name.lower(), etype)
+            if key in seen:
+                continue
+            seen.add(key)
+            aliases_raw = e.get("aliases") or []
+            aliases = [a.strip() for a in aliases_raw if isinstance(a, str) and a.strip()]
+            out.append(EntityMention(
+                canonical_name=name,
+                entity_type=etype,
+                aliases=aliases,
+                description=(e.get("description") or None),
+                context=(e.get("context") or None),
+            ))
+        return out
+
+    def _normalize_facts(self, raw: list[dict]) -> list[ExtractedFact]:
+        out: list[ExtractedFact] = []
+        for f in raw:
+            text_val = (f.get("content") or "").strip()
+            ftype = (f.get("fact_type") or "claim").strip().lower() or "claim"
+            if not text_val:
+                continue
+            refs_raw = f.get("entity_refs") or []
+            refs = []
+            for r in refs_raw:
+                rname = (r.get("name") or "").strip()
+                rtype = (r.get("type") or "topic").strip().lower() or "topic"
+                rrole = (r.get("role") or "subject").strip().lower() or "subject"
+                if not rname:
+                    continue
+                refs.append({"name": rname, "type": rtype, "role": rrole})
+            if not refs:
+                continue
+            try:
+                conf = float(f.get("confidence") or 0.5)
+            except (TypeError, ValueError):
+                conf = 0.5
+            out.append(ExtractedFact(
+                content=text_val,
+                fact_type=ftype,
+                entity_refs=refs,
+                fact_time_iso=(f.get("fact_time_iso") or None),
+                source_quote=(f.get("source_quote") or None),
+                confidence=max(0.0, min(1.0, conf)),
+            ))
+        return out
+
+    def _normalize_relationships(self, raw: list[dict]) -> list[ProposedRelationship]:
+        out: list[ProposedRelationship] = []
+        for r in raw:
+            sn = (r.get("source_name") or "").strip()
+            st = (r.get("source_type") or "topic").strip().lower() or "topic"
+            tn = (r.get("target_name") or "").strip()
+            tt = (r.get("target_type") or "topic").strip().lower() or "topic"
+            lt = (r.get("link_type") or "related").strip().lower() or "related"
+            if not sn or not tn or sn.lower() == tn.lower():
+                continue
+            out.append(ProposedRelationship(
+                source_name=sn, source_type=st,
+                target_name=tn, target_type=tt,
+                link_type=lt,
+                rationale=(r.get("rationale") or None),
+            ))
+        return out
+
+
+# --- module-level helper shared by the fallback extract path ---
+
+
+def _unwrap(data, key: str) -> list:
+    """Local models often return a bare JSON array when asked for
+    {"<key>": [...]}. Accept both shapes so the extractor doesn't hard-fail
+    on a minor schema deviation that still contains the useful payload."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        val = data.get(key)
+        if isinstance(val, list):
+            return val
+        # Sometimes the model wraps under a different key — take the first
+        # list-valued field as a last resort.
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+    return []
+
+
+async def _llm_json_with_repair(
+    llm: LLMProvider,
+    system: str,
+    user: str,
+    *,
+    max_tokens: int = 2048,
+    temperature: float = 0.2,
+    schema_hint: str = "",
+) -> dict:
+    """Call the LLM expecting JSON; one repair retry on parse failure.
+    Used only by the small-model fallback path in BasicEngine.extract."""
+    resp = await llm.complete(
+        messages=[{"role": "user", "content": user}],
+        system=system,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    try:
+        return _parse_json(resp)
+    except ValueError as e:
+        logger.warning(f"JSON parse failed: {e}; requesting repair")
+        repair_user = (
+            "Your previous response could not be parsed as JSON. "
+            f"Error: {e}\n\nPrevious response (truncated):\n{resp[:1500]}\n\n"
+            f"Reply with VALID JSON ONLY, matching this shape:\n{schema_hint}\n"
+            "No prose, no markdown fences, no trailing text."
+        )
+        resp2 = await llm.complete(
+            messages=[{"role": "user", "content": repair_user}],
+            system=system,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        return _parse_json(resp2)

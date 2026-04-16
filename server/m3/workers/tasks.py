@@ -70,6 +70,7 @@ async def startup(ctx: dict) -> None:
         engine=compilation_engine,
         llm=llm,
         embedder=embedder,
+        wiki_mode=settings.processing.wiki_mode,
     )
 
     ctx["compiler"] = compiler

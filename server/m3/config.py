@@ -37,6 +37,12 @@ class LLMProviderConfig(BaseModel):
     api_key: str = ""
     model: str = "claude-sonnet-4-20250514"
     base_url: str | None = None  # For OpenAI-compatible APIs (MiniMax, OpenRouter, Groq, etc.)
+    # Capability hints for openai_compatible endpoints. Anthropic is always
+    # capable. Cloud vendors that speak OpenAI (Groq, Together, OpenRouter,
+    # OpenAI itself) should set supports_tools=true; plain local Ollama
+    # without a tool-capable model should leave these at false.
+    supports_tools: bool = False
+    supports_vision: bool = False
 
 
 class EmbeddingSettings(BaseModel):
