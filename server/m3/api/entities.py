@@ -1,0 +1,121 @@
+"""
+M3 Entities API — Phase 3 read-only endpoints for entity pages.
+
+Minimal surface: list + detail. Phase 4 grows this with insight feed,
+filtering, and search. For now it's just enough to fetch a rendered
+entity page via HTTP so smoke tests and a future UI don't have to
+psql the database.
+"""
+
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from m3.api.deps import get_db, verify_auth
+from m3.schemas.api import (
+    EntityDetail,
+    EntitySummary,
+    PaginatedResponse,
+    RelatedEntity,
+)
+from m3.storage.models import Entity, EntityLink
+
+router = APIRouter(prefix="/api/v1/entities", tags=["entities"])
+
+
+@router.get("", response_model=PaginatedResponse[EntitySummary])
+async def list_entities(
+    entity_type: str | None = Query(None, description="Filter by exact entity_type"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    base = select(Entity)
+    if entity_type:
+        base = base.where(Entity.entity_type == entity_type.lower())
+
+    total = (await db.execute(
+        select(func.count()).select_from(base.subquery())
+    )).scalar_one()
+
+    offset = (page - 1) * per_page
+    stmt = (
+        base.order_by(Entity.updated_at.desc())
+        .offset(offset)
+        .limit(per_page)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    items = [
+        EntitySummary(
+            id=e.id,
+            canonical_name=e.canonical_name,
+            entity_type=e.entity_type,
+            aliases=list(e.aliases or []),
+            updated_at=e.updated_at,
+            has_page=bool(e.page_content),
+            facts_since_render=e.facts_since_render or 0,
+        )
+        for e in rows
+    ]
+    return PaginatedResponse(items=items, total=total, page=page, per_page=per_page)
+
+
+@router.get("/{entity_id}", response_model=EntityDetail)
+async def get_entity(
+    entity_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    ent = await db.get(Entity, entity_id)
+    if ent is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    # Bidirectional related: edges in either direction, deduped by (name, link_type)
+    # keeping the max weight. Same logic the renderer uses, intentionally.
+    out_stmt = (
+        select(
+            Entity.id, Entity.canonical_name, Entity.entity_type,
+            EntityLink.link_type, EntityLink.weight,
+        )
+        .join(EntityLink, EntityLink.target_entity_id == Entity.id)
+        .where(EntityLink.source_entity_id == entity_id)
+    )
+    in_stmt = (
+        select(
+            Entity.id, Entity.canonical_name, Entity.entity_type,
+            EntityLink.link_type, EntityLink.weight,
+        )
+        .join(EntityLink, EntityLink.source_entity_id == Entity.id)
+        .where(EntityLink.target_entity_id == entity_id)
+    )
+    rows = list((await db.execute(out_stmt)).all()) + list((await db.execute(in_stmt)).all())
+
+    dedup: dict[tuple[uuid.UUID, str], RelatedEntity] = {}
+    for rid, rname, rtype, link_type, weight in rows:
+        key = (rid, link_type)
+        prev = dedup.get(key)
+        if prev is None or prev.weight < (weight or 0):
+            dedup[key] = RelatedEntity(
+                id=rid, canonical_name=rname, entity_type=rtype,
+                link_type=link_type, weight=weight or 0,
+            )
+    related = sorted(dedup.values(), key=lambda r: r.weight, reverse=True)[:10]
+
+    return EntityDetail(
+        id=ent.id,
+        canonical_name=ent.canonical_name,
+        entity_type=ent.entity_type,
+        aliases=list(ent.aliases or []),
+        description=ent.description,
+        page_content=ent.page_content,
+        page_overview=ent.page_overview,
+        page_dirty=ent.page_dirty,
+        facts_since_render=ent.facts_since_render or 0,
+        created_at=ent.created_at,
+        updated_at=ent.updated_at,
+        related=related,
+    )

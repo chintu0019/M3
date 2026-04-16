@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from m3.api.chat import router as chat_router
+from m3.api.entities import router as entities_router
 from m3.api.ingest import router as ingest_router
 from m3.api.library import router as library_router
 from m3.api.settings import router as settings_router
@@ -149,6 +150,7 @@ app.include_router(wiki_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
 app.include_router(library_router)
+app.include_router(entities_router)
 
 
 @app.get("/api/v1/status")

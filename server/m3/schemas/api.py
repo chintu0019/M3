@@ -193,3 +193,39 @@ class PaginatedResponse(BaseModel, Generic[T]):
     total: int
     page: int
     per_page: int
+
+
+# --- Entities (Phase 3) ---
+
+
+class EntitySummary(BaseModel):
+    id: uuid.UUID
+    canonical_name: str
+    entity_type: str
+    aliases: list[str] = []
+    updated_at: datetime
+    has_page: bool
+    facts_since_render: int
+
+
+class RelatedEntity(BaseModel):
+    id: uuid.UUID
+    canonical_name: str
+    entity_type: str
+    link_type: str
+    weight: int
+
+
+class EntityDetail(BaseModel):
+    id: uuid.UUID
+    canonical_name: str
+    entity_type: str
+    aliases: list[str] = []
+    description: str | None = None
+    page_content: str | None = None
+    page_overview: str | None = None
+    page_dirty: bool
+    facts_since_render: int
+    created_at: datetime
+    updated_at: datetime
+    related: list[RelatedEntity] = []
