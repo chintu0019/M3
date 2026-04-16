@@ -110,6 +110,17 @@ class ExtractedFact:
 
 
 @dataclass
+class RenderedPage:
+    """Output of render_entity. `content` is the full markdown page;
+    `overview` is a one-paragraph summary for list views. Both use
+    `[^<item_id>]` footnote-style citations that must resolve to facts
+    supplied as input — the renderer module validates this downstream."""
+    content: str
+    overview: str
+    model_notes: str | None = None
+
+
+@dataclass
 class ProposedRelationship:
     """An engine-proposed semantic edge between two entities found in one
     item. Capable engines emit these directly; BasicEngine's fallback path
@@ -234,6 +245,24 @@ class CompilationEngine(ABC):
         engines keep working unchanged.
         """
         raise NotImplementedError("This engine does not support entity extraction")
+
+    async def render_entity(
+        self,
+        entity: dict,
+        facts: list[dict],
+        related: list[dict] | None = None,
+    ) -> RenderedPage:
+        """Render an entity page from its facts.
+
+        `entity` keys: canonical_name, entity_type, aliases, description.
+        `facts` is newest-first; each dict has: item_id, content, fact_type,
+            source_quote, confidence, created_at, role (on this entity),
+            fact_time.
+        `related` is optional: [{name, type, link_type, weight}, ...].
+
+        Must use `[^<item_id>]` footnote-style citations. Every cited item_id
+        must appear in `facts`. Default raises — entity engines override."""
+        raise NotImplementedError("This engine does not support entity rendering")
 
     async def find_insights(
         self,

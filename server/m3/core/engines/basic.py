@@ -24,6 +24,7 @@ from m3.core.engines.base import (
     LinkUpdate,
     PageUpdate,
     ProposedRelationship,
+    RenderedPage,
     SynthesisResult,
     TextBlock,
     content_to_text,
@@ -138,6 +139,34 @@ EXTRACT_TOOL_SCHEMA = {
         },
     },
     "required": ["entities", "facts"],
+}
+
+
+# --- Render tool schema (Task: Phase 3 / render_entity) ---
+
+RENDER_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "content": {
+            "type": "string",
+            "description": (
+                "Full markdown page about the entity. Every factual claim "
+                "must be followed by a footnote citation of the form "
+                "[^<item_id>] where <item_id> is one of the item_ids in the "
+                "facts list. Never invent an item_id. Synthesis across "
+                "multiple facts is allowed but each synthetic claim still "
+                "needs citations for all supporting facts."
+            ),
+        },
+        "overview": {
+            "type": "string",
+            "description": (
+                "One-paragraph summary (<=2 sentences) for list views. "
+                "Citations optional here but must still be valid item_ids."
+            ),
+        },
+    },
+    "required": ["content", "overview"],
 }
 
 
@@ -736,6 +765,153 @@ Return JSON:
                 rationale=(r.get("rationale") or None),
             ))
         return out
+
+    # --- Entity rendering ---
+
+    async def render_entity(
+        self,
+        entity: dict,
+        facts: list[dict],
+        related: list[dict] | None = None,
+    ) -> RenderedPage:
+        related = related or []
+        if self.llm.supports_tools:
+            try:
+                return await self._render_capable(entity, facts, related)
+            except Exception as e:
+                logger.warning(f"Capable render failed, falling back: {e}")
+        return await self._render_fallback(entity, facts, related)
+
+    async def _render_capable(
+        self, entity: dict, facts: list[dict], related: list[dict],
+    ) -> RenderedPage:
+        valid_ids = {str(f["item_id"]) for f in facts if f.get("item_id")}
+        facts_block = "\n".join(
+            f"{i+1}. [{f['fact_type']}] {f['content']} "
+            f"(item_id: {f['item_id']}, role: {f.get('role','')}"
+            + (f", source: \"{f['source_quote']}\"" if f.get('source_quote') else "")
+            + ")"
+            for i, f in enumerate(facts)
+        )
+        related_block = (
+            "\n".join(
+                f"- {r['name']} ({r['type']}) via {r['link_type']} [w={r.get('weight', 1)}]"
+                for r in related
+            ) or "(none)"
+        )
+        aliases = ", ".join(entity.get("aliases") or []) or "(none)"
+
+        system = (
+            "You write entity pages for M3, a personal knowledge base. This "
+            "is not Wikipedia — the reader is the owner. Write a clear, useful "
+            "markdown page grounded entirely in the supplied facts.\n\n"
+            "STRICT RULES:\n"
+            "- Every factual claim ends with a footnote citation [^<item_id>].\n"
+            "- Only use item_ids from the KNOWN ITEM IDS list. Never invent one.\n"
+            "- Synthesis is allowed: combine multiple facts into a sentence as "
+            "long as you cite each supporting item_id.\n"
+            "- If the facts don't answer something, say so; don't speculate.\n"
+            "- Structure is yours to choose; common sections: Overview, "
+            "Recent activity, Open questions, Related. Omit any that don't fit.\n"
+            "- Call the render_entity tool exactly once with your output."
+        )
+        user = (
+            f"Entity: {entity['canonical_name']} ({entity['entity_type']})\n"
+            f"Aliases: {aliases}\n"
+            f"Description: {entity.get('description') or '(none)'}\n\n"
+            f"Related entities (by link weight):\n{related_block}\n\n"
+            f"KNOWN ITEM IDS (use only these in [^...] citations):\n"
+            + ", ".join(sorted(valid_ids))
+            + f"\n\nFacts (newest first):\n{facts_block}"
+        )
+
+        tool = Tool(
+            name="render_entity",
+            description="Emit the rendered entity page (markdown content + short overview).",
+            input_schema=RENDER_TOOL_SCHEMA,
+        )
+        result = await self.llm.complete_tool(
+            messages=[{"role": "user", "content": user}],
+            tools=[tool],
+            system=system,
+            tool_choice="render_entity",
+            max_tokens=4096,
+            temperature=0.3,
+        )
+        data = result.input or {}
+        return RenderedPage(
+            content=(data.get("content") or "").strip(),
+            overview=(data.get("overview") or "").strip(),
+        )
+
+    async def _render_fallback(
+        self, entity: dict, facts: list[dict], related: list[dict],
+    ) -> RenderedPage:
+        """Local-model-safe path. Tier the facts: older facts get one LLM
+        summary paragraph, recent facts (last 30) are dumped as a raw cited
+        list. Overview is derived from the summary."""
+        recent = facts[:30]
+        older = facts[30:]
+
+        header = (
+            f"# {entity['canonical_name']}\n\n"
+            f"**Type:** {entity['entity_type']}  \n"
+        )
+        if entity.get("aliases"):
+            header += f"**Aliases:** {', '.join(entity['aliases'])}  \n"
+        if entity.get("description"):
+            header += f"\n{entity['description']}\n"
+
+        summary_md = ""
+        overview = ""
+        if older:
+            older_block = "\n".join(
+                f"- {f['content']} [^{f['item_id']}]" for f in older
+            )
+            prompt = (
+                f"Write a 3-5 sentence summary paragraph about "
+                f"'{entity['canonical_name']}' based ONLY on these facts. "
+                f"Keep each [^<item_id>] citation exactly as written. Do not "
+                f"invent facts or citations. Plain markdown, no headers.\n\n"
+                f"{older_block}"
+            )
+            try:
+                summary_md = (await self.llm.complete(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=400,
+                    temperature=0.3,
+                )).strip()
+            except Exception as e:
+                logger.warning(f"Fallback summary call failed: {e}")
+                summary_md = ""
+            # Overview = first sentence, stripped of markdown
+            if summary_md:
+                first = summary_md.split(".")[0].strip()
+                overview = first + "." if first else ""
+
+        if not overview and recent:
+            # Derive a bare overview from the top fact.
+            top = recent[0]
+            overview = f"{top['content']} [^{top['item_id']}]"
+
+        recent_block = ""
+        if recent:
+            recent_block = "## Recent\n\n" + "\n".join(
+                f"- {f['content']} [^{f['item_id']}]" for f in recent
+            ) + "\n"
+
+        related_block = ""
+        if related:
+            related_block = "## Related\n\n" + "\n".join(
+                f"- {r['name']} ({r['type']}) — {r['link_type']}"
+                for r in related
+            ) + "\n"
+
+        summary_section = (
+            f"## Summary\n\n{summary_md}\n\n" if summary_md else ""
+        )
+        content = header + "\n" + summary_section + recent_block + related_block
+        return RenderedPage(content=content.strip(), overview=overview)
 
 
 # --- module-level helper shared by the fallback extract path ---
