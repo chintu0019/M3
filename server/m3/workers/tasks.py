@@ -43,6 +43,34 @@ async def deep_compile(ctx: dict) -> None:
     await compiler.run_deep_compile()
 
 
+async def render_dirty_entities_task(ctx: dict) -> None:
+    """Regenerate wiki-style pages for any entity that accumulated new
+    facts since the last render. Phase 3 cron — runs every 5 minutes."""
+    from m3.core.entity_renderer import render_dirty_entities
+    compiler: Compiler = ctx["compiler"]
+    n = await render_dirty_entities(
+        db=compiler.db,
+        files=compiler.files,
+        engine=compiler.engine,
+        llm=compiler.llm,
+        embedder=compiler.embedder,
+        limit=20,
+    )
+    if n:
+        logger.info(f"Rendered {n} dirty entities")
+
+
+async def consolidate_types_task(ctx: dict) -> None:
+    """Ask the engine to merge near-duplicate rows in the type dim tables
+    and rewrite base rows onto the canonical survivor. Phase 3 cron —
+    runs daily."""
+    from m3.core.type_consolidator import consolidate_types
+    compiler: Compiler = ctx["compiler"]
+    summary = await consolidate_types(db=compiler.db, engine=compiler.engine)
+    if any(summary.values()):
+        logger.info(f"Type consolidation applied: {summary}")
+
+
 async def startup(ctx: dict) -> None:
     """Initialize all dependencies for the worker process."""
     logger.info("Worker starting up...")
@@ -117,10 +145,12 @@ async def shutdown(ctx: dict) -> None:
 class WorkerSettings:
     """ARQ worker configuration."""
 
-    functions = [process_item]
+    functions = [process_item, render_dirty_entities_task, consolidate_types_task]
     cron_jobs = [
         cron(compile_pass, minute={0}),  # Every hour on the hour
         cron(deep_compile, weekday={6}, hour={3}, minute={0}),  # Sunday 3am
+        cron(render_dirty_entities_task, minute=set(range(0, 60, 5))),  # Every 5 min
+        cron(consolidate_types_task, hour={4}, minute={0}),  # Daily at 04:00 UTC
     ]
     on_startup = startup
     on_shutdown = shutdown
