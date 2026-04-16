@@ -144,6 +144,33 @@ EXTRACT_TOOL_SCHEMA = {
 
 # --- Render tool schema (Task: Phase 3 / render_entity) ---
 
+CONSOLIDATE_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        key: {
+            "type": "array",
+            "description": (
+                f"Merges for {key}. Each entry: merge the row named `from` "
+                "into `to`. Only propose a merge when the two names clearly "
+                "refer to the same concept (synonym, plural/singular, casing "
+                "drift). Prefer the more common survivor."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "from": {"type": "string"},
+                    "to": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["from", "to"],
+            },
+        }
+        for key in ("entity_type_merges", "fact_type_merges", "fact_role_merges")
+    },
+    "required": ["entity_type_merges", "fact_type_merges", "fact_role_merges"],
+}
+
+
 RENDER_TOOL_SCHEMA = {
     "type": "object",
     "properties": {
@@ -912,6 +939,90 @@ Return JSON:
         )
         content = header + "\n" + summary_section + recent_block + related_block
         return RenderedPage(content=content.strip(), overview=overview)
+
+    # --- Type vocabulary consolidation ---
+
+    async def consolidate_types(
+        self,
+        entity_types: list[dict],
+        fact_types: list[dict],
+        fact_roles: list[dict],
+    ) -> dict[str, list[dict]]:
+        """Propose merges across the three free-form vocabularies. Capable
+        path calls the LLM via a tool; fallback returns empty lists (local
+        models do this badly and silent no-op beats silent drift)."""
+        empty = {"entity_types": [], "fact_types": [], "fact_roles": []}
+        if not self.llm.supports_tools:
+            logger.info(
+                "consolidate_types skipped: active LLM does not support tools"
+            )
+            return empty
+
+        def _lines(rows: list[dict]) -> str:
+            if not rows:
+                return "(none)"
+            return "\n".join(
+                f"- {r['name']} (uses={r.get('usage_count', 0)})" for r in rows
+            )
+
+        system = (
+            "You consolidate free-form type vocabularies in a personal "
+            "knowledge base. The user has three vocabularies: entity types "
+            "(e.g. person, project), fact types (e.g. claim, decision), and "
+            "fact roles (e.g. subject, attributed_to). Each has accumulated "
+            "organically; some names drift (e.g. 'individual' and 'person', "
+            "'projects' and 'project').\n\n"
+            "STRICT RULES:\n"
+            "- Only merge when two names clearly refer to the same concept: "
+            "synonyms, plural/singular, casing drift.\n"
+            "- Prefer the name with the higher usage_count as the survivor "
+            "(the `to` field).\n"
+            "- Never merge distinct concepts even if semantically related "
+            "('person' and 'company' are both agents, but distinct).\n"
+            "- If nothing should merge, return empty arrays.\n"
+            "- Call consolidate_types exactly once."
+        )
+        user = (
+            f"entity_types:\n{_lines(entity_types)}\n\n"
+            f"fact_types:\n{_lines(fact_types)}\n\n"
+            f"fact_roles:\n{_lines(fact_roles)}"
+        )
+        tool = Tool(
+            name="consolidate_types",
+            description="Emit merges across the three vocabularies.",
+            input_schema=CONSOLIDATE_TOOL_SCHEMA,
+        )
+        try:
+            result = await self.llm.complete_tool(
+                messages=[{"role": "user", "content": user}],
+                tools=[tool],
+                system=system,
+                tool_choice="consolidate_types",
+                max_tokens=1024,
+                temperature=0.0,
+            )
+        except Exception as e:
+            logger.warning(f"consolidate_types tool call failed: {e}")
+            return empty
+
+        data = result.input or {}
+
+        def _clean(key: str) -> list[dict]:
+            raw = data.get(key) or []
+            out = []
+            for entry in raw:
+                frm = (entry.get("from") or "").strip().lower()
+                to = (entry.get("to") or "").strip().lower()
+                if not frm or not to or frm == to:
+                    continue
+                out.append({"from": frm, "to": to, "reason": entry.get("reason") or ""})
+            return out
+
+        return {
+            "entity_types": _clean("entity_type_merges"),
+            "fact_types": _clean("fact_type_merges"),
+            "fact_roles": _clean("fact_role_merges"),
+        }
 
 
 # --- module-level helper shared by the fallback extract path ---
