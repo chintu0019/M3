@@ -118,7 +118,9 @@ async def bulk_retry(
             item.error_message = None
             item.processing_started_at = None
             item.processed_at = None
-            await db.flush()
+            # Commit each reset before enqueueing so the worker sees
+            # status=pending instead of racing the deferred get_db commit.
+            await db.commit()
             await pool.enqueue_job("process_item", str(item_id))
             result.succeeded.append(item_id)
         except Exception as e:
@@ -338,7 +340,9 @@ async def retry_item(
     item.error_message = None
     item.processing_started_at = None
     item.processed_at = None
-    await db.flush()
+    # Commit before enqueueing — the worker would otherwise race the deferred
+    # get_db commit and see the pre-reset row (or "not found" for new inserts).
+    await db.commit()
 
     pool = request.app.state.arq_pool
     await pool.enqueue_job("process_item", str(item_id))

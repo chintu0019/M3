@@ -114,9 +114,11 @@ async def ingest_json(
         user_project=project,
     )
     db.add(item)
-    await db.flush()
+    # Commit before enqueueing so the worker can't grab the job before the
+    # row is visible in other sessions. get_db's end-of-request commit is
+    # too late — the worker raced it and lost.
+    await db.commit()
 
-    # Enqueue processing job
     if hasattr(request.app.state, "arq_pool"):
         await request.app.state.arq_pool.enqueue_job("process_item", str(item_id))
 

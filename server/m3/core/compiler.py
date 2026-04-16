@@ -4,6 +4,7 @@ M3 Compiler -- the processing pipeline orchestrator.
 Takes raw items through: extract -> classify -> find related -> compile -> write wiki -> update links.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -78,6 +79,13 @@ class Compiler:
         async with self.db() as session:
             try:
                 item = await session.get(RawItem, item_id)
+                if not item:
+                    # Belt-and-braces for enqueue-before-commit races. All
+                    # known producers now commit before enqueueing, but a
+                    # replication lag or a caller we missed shouldn't lose
+                    # the item. One short retry clears any real race.
+                    await asyncio.sleep(0.5)
+                    item = await session.get(RawItem, item_id)
                 if not item:
                     logger.error(f"Item {item_id} not found")
                     return
