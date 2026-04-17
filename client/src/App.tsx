@@ -4,7 +4,6 @@ import { api } from "./api/client";
 import Library from "./views/Library";
 import LibraryDetail from "./views/LibraryDetail";
 import Entities from "./views/Entities";
-import Graph from "./views/Graph";
 import Insights from "./views/Insights";
 import Chat from "./views/Chat";
 import Settings from "./views/Settings";
@@ -30,10 +29,7 @@ function Nav({ activeModel }: { activeModel: string | null }) {
       <NavLink to="/entities" className={linkClass}>
         Entities
       </NavLink>
-      <NavLink to="/graph" className={linkClass}>
-        Graph
-      </NavLink>
-      <NavLink to="/insights" className={linkClass}>
+<NavLink to="/insights" className={linkClass}>
         Insights
       </NavLink>
       <NavLink to="/chat" className={linkClass}>
@@ -85,7 +81,6 @@ export default function App() {
           <Route path="/library/:id" element={<LibraryDetail />} />
           <Route path="/entities" element={<Entities />} />
           <Route path="/entities/:entityId" element={<Entities />} />
-          <Route path="/graph" element={<Graph />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
