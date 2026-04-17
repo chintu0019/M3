@@ -8,7 +8,7 @@ run its own force layout for this node."
 """
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -174,6 +174,7 @@ async def patch_layout(
             "width": stmt.excluded.width,
             "height": stmt.excluded.height,
             "z_index": stmt.excluded.z_index,
+            "updated_at": func.now(),
         },
     )
     await db.execute(stmt)
