@@ -51,7 +51,8 @@ class RawItemResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    conversation_id: str | None = None
+    thread_id: uuid.UUID | None = None
+    conversation_id: str | None = None  # retained for backward compat; unused
 
 
 # --- Library (detail, notes, bulk, stats) ---
@@ -269,3 +270,32 @@ class EntityLinkResponse(BaseModel):
     target_entity_id: uuid.UUID
     link_type: str
     weight: int
+
+
+# --- Chat threads (Phase C) ---
+
+
+class ChatThreadCreateRequest(BaseModel):
+    title: str | None = None
+
+
+class ChatThreadSummary(BaseModel):
+    id: uuid.UUID
+    title: str | None
+    summary: str | None
+    status: str
+    created_at: datetime
+    ended_at: datetime | None
+    message_count: int
+
+
+class ChatMessageResponse(BaseModel):
+    id: uuid.UUID
+    role: str
+    content: str
+    created_at: datetime
+
+
+class ChatThreadDetail(ChatThreadSummary):
+    messages: list[ChatMessageResponse]
+    cited_entity_ids: list[uuid.UUID]
