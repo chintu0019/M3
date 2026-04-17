@@ -14,6 +14,8 @@ import "@xyflow/react/dist/style.css";
 import "../components/canvas/canvas.css";
 import EntityNode from "../components/canvas/EntityNode";
 import InsightNode from "../components/canvas/InsightNode";
+import ThreadNode from "../components/canvas/ThreadNode";
+import ChatDock from "../components/chat/ChatDock";
 import NodeEditor from "../components/canvas/NodeEditor";
 import LinkTypeMenu from "../components/canvas/LinkTypeMenu";
 import NewNodeMenu from "../components/canvas/NewNodeMenu";
@@ -43,6 +45,7 @@ function CanvasInner() {
     edges,
     loading,
     error,
+    reload,
     queueLayout,
     setNodes,
     upsertNode,
@@ -58,7 +61,7 @@ function CanvasInner() {
   const [drawerPane, setDrawerPane] = useState<DrawerPane | null>(null);
 
   const nodeTypes = useMemo(
-    () => ({ entity: EntityNode, insight: InsightNode }),
+    () => ({ entity: EntityNode, insight: InsightNode, thread: ThreadNode }),
     [],
   );
 
@@ -209,6 +212,37 @@ function CanvasInner() {
     [getNode, setCenter],
   );
 
+  const onCite = useCallback(
+    (cite: { entity_id: string }) => {
+      const nodeId = `entity:${cite.entity_id}`;
+      const n = getNode(nodeId);
+      if (!n) return;
+      const w = n.measured?.width ?? 160;
+      const h = n.measured?.height ?? 80;
+      setCenter(n.position.x + w / 2, n.position.y + h / 2, {
+        zoom: 1.1,
+        duration: 600,
+      });
+      // Flag the node for a pulse by writing a cssVar-style hint via data. The
+      // node component reads it and self-clears the class after the animation.
+      setNodes((prev) =>
+        prev.map((no) => {
+          if (no.id !== nodeId) return no;
+          return {
+            ...no,
+            data: { ...(no.data as object), _pulseAt: Date.now() },
+          };
+        }),
+      );
+    },
+    [getNode, setCenter, setNodes],
+  );
+
+  const onThreadChanged = useCallback(() => {
+    // Refetch so the new thread node (or the ended-state transition) shows up.
+    void reload();
+  }, [reload]);
+
   const hotkeys = useMemo(
     () => ({
       "cmd+k": (e: KeyboardEvent) => {
@@ -302,6 +336,8 @@ function CanvasInner() {
       )}
 
       <ToolDrawer open={drawerPane} onClose={() => setDrawerPane(null)} />
+
+      <ChatDock onCite={onCite} onThreadChanged={onThreadChanged} />
     </div>
   );
 }
