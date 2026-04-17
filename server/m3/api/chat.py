@@ -49,7 +49,7 @@ async def _resolve_mention(
                 .where(
                     or_(
                         func.lower(Entity.canonical_name) == key,
-                        Entity.aliases.any(name),
+                        Entity.aliases.any(key),
                     )
                 )
                 .limit(1)
@@ -153,38 +153,48 @@ Rules:
         cited_names: set[str] = set()
         full_response = ""
 
-        async for chunk in llm.complete_stream(
-            messages=[{"role": "user", "content": body.message}],
-            system=system,
-            temperature=0.5,
-        ):
-            full_response += chunk
-            buffer += chunk
-            yield f"data: {json.dumps({'text': chunk})}\n\n"
+        try:
+            async for chunk in llm.complete_stream(
+                messages=[{"role": "user", "content": body.message}],
+                system=system,
+                temperature=0.5,
+            ):
+                full_response += chunk
+                buffer += chunk
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
 
-            # Drain completed [[...]] mentions from the running buffer.
-            while True:
-                m = MENTION_RE.search(buffer)
-                if m is None:
-                    break
-                name = m.group(1)
-                buffer = buffer[m.end():]
-                key = name.lower().strip()
-                if key in cited_names:
-                    continue
-                cited_names.add(key)
-                cite = await _resolve_mention(db_factory, name)
-                if cite is None:
-                    continue
-                yield f"data: {json.dumps({'cite': cite})}\n\n"
-                if thread_id is not None:
-                    await _record_thread_citation(
-                        db_factory, thread_id, cite["entity_id"]
-                    )
+                # Drain completed [[...]] mentions from the running buffer.
+                while True:
+                    m = MENTION_RE.search(buffer)
+                    if m is None:
+                        break
+                    name = m.group(1)
+                    buffer = buffer[m.end():]
+                    key = name.lower().strip()
+                    if key in cited_names:
+                        continue
+                    cited_names.add(key)
+                    cite = await _resolve_mention(db_factory, name)
+                    if cite is None:
+                        continue
+                    yield f"data: {json.dumps({'cite': cite})}\n\n"
+                    if thread_id is not None:
+                        await _record_thread_citation(
+                            db_factory, thread_id, cite["entity_id"]
+                        )
 
-        if thread_id is not None:
-            await _persist_message(db_factory, thread_id, "assistant", full_response)
+                # Trim the buffer to just before the last unclosed "[[" so a
+                # mention split across chunk boundaries stays intact.
+                last_open = buffer.rfind("[[")
+                buffer = buffer[last_open:] if last_open != -1 else ""
 
-        yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            # Persist whatever we got, even if the client disconnected mid-stream.
+            # A partial assistant turn is better than an orphaned user turn.
+            if thread_id is not None and full_response:
+                await _persist_message(
+                    db_factory, thread_id, "assistant", full_response
+                )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

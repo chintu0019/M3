@@ -28,12 +28,7 @@ from m3.storage.models import ChatMessage, ChatThread, ChatThreadPage
 router = APIRouter(prefix="/api/v1/chat/threads", tags=["chat-threads"])
 
 
-async def _summary(db: AsyncSession, t: ChatThread) -> ChatThreadSummary:
-    count = (
-        await db.execute(
-            select(func.count(ChatMessage.id)).where(ChatMessage.thread_id == t.id)
-        )
-    ).scalar_one()
+def _build_summary(t: ChatThread, message_count: int) -> ChatThreadSummary:
     return ChatThreadSummary(
         id=t.id,
         title=t.title,
@@ -41,8 +36,17 @@ async def _summary(db: AsyncSession, t: ChatThread) -> ChatThreadSummary:
         status=t.status,
         created_at=t.created_at,
         ended_at=t.ended_at,
-        message_count=int(count or 0),
+        message_count=message_count,
     )
+
+
+async def _summary(db: AsyncSession, t: ChatThread) -> ChatThreadSummary:
+    count = (
+        await db.execute(
+            select(func.count(ChatMessage.id)).where(ChatMessage.thread_id == t.id)
+        )
+    ).scalar_one()
+    return _build_summary(t, int(count or 0))
 
 
 @router.get("", response_model=PaginatedResponse[ChatThreadSummary])
@@ -66,7 +70,19 @@ async def list_threads(
             .limit(per_page)
         )
     ).scalars().all()
-    items = [await _summary(db, t) for t in rows]
+    # Single aggregation query instead of N SELECT COUNT(*) round-trips.
+    counts: dict[uuid.UUID, int] = {}
+    if rows:
+        thread_ids = [t.id for t in rows]
+        count_rows = (
+            await db.execute(
+                select(ChatMessage.thread_id, func.count(ChatMessage.id))
+                .where(ChatMessage.thread_id.in_(thread_ids))
+                .group_by(ChatMessage.thread_id)
+            )
+        ).all()
+        counts = {tid: int(c or 0) for tid, c in count_rows}
+    items = [_build_summary(t, counts.get(t.id, 0)) for t in rows]
     return PaginatedResponse(
         items=items, total=int(total or 0), page=page, per_page=per_page
     )
