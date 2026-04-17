@@ -36,11 +36,17 @@ export default function ChatDock({ onCite, onThreadChanged }: ChatDockProps) {
   async function send() {
     const text = input.trim();
     if (!text || streaming) return;
-    const tid = await ensureThread();
-    setInput("");
-    setMessages((m) => [...m, { role: "user", content: text }, { role: "assistant", content: "" }]);
+    // Flip streaming and clear input synchronously so a fast second click
+    // can't race through ensureThread() and create a duplicate thread.
     setStreaming(true);
+    setInput("");
     try {
+      const tid = await ensureThread();
+      setMessages((m) => [
+        ...m,
+        { role: "user", content: text },
+        { role: "assistant", content: "" },
+      ]);
       for await (const event of api.chat(text, tid)) {
         if (event.text) {
           setMessages((m) => {

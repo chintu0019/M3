@@ -483,24 +483,34 @@ export const api = {
     const decoder = new TextDecoder();
     let buffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") return;
-          try {
-            yield JSON.parse(data);
-          } catch {
-            // skip malformed
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") return;
+            try {
+              yield JSON.parse(data);
+            } catch {
+              // skip malformed
+            }
           }
         }
+      }
+    } finally {
+      // Release the connection if the consumer breaks out early (component
+      // unmount, dock collapse mid-stream, thrown error downstream).
+      try {
+        await reader.cancel();
+      } catch {
+        // reader may already be closed
       }
     }
   },
