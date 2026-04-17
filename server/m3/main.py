@@ -22,6 +22,7 @@ from m3.api.ingest import router as ingest_router
 from m3.api.insights import router as insights_router
 from m3.api.library import router as library_router
 from m3.api.settings import router as settings_router
+from m3.api.threads import router as threads_router
 from m3.config import load_settings
 from m3.core.engines.loader import load_engine
 from m3.core.llm import create_embedding_provider, create_llm_provider
@@ -155,6 +156,7 @@ app.include_router(entities_router)
 app.include_router(entity_links_router)
 app.include_router(insights_router)
 app.include_router(canvas_router)
+app.include_router(threads_router)
 
 
 @app.get("/api/v1/status")
