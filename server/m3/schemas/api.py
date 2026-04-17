@@ -194,3 +194,48 @@ class InsightSummary(BaseModel):
 
 class InsightPatchRequest(BaseModel):
     status: str  # new | acknowledged | dismissed
+
+
+# --- Canvas ---
+
+
+class CanvasNode(BaseModel):
+    id: str  # "entity:<uuid>" or "insight:<uuid>"
+    node_type: str  # "entity" | "insight"
+    label: str
+    data: dict  # type-specific payload (entity_type, has_page, insight_type, etc.)
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+
+
+class CanvasEdge(BaseModel):
+    id: str  # "link:<uuid>"
+    source: str  # node id
+    target: str  # node id
+    edge_type: str  # "related", "references", etc.
+    weight: float = 1.0
+
+
+class CanvasResponse(BaseModel):
+    nodes: list[CanvasNode]
+    edges: list[CanvasEdge]
+
+
+class CanvasLayoutUpdate(BaseModel):
+    node_type: str
+    node_id: str
+    x: float
+    y: float
+    width: float | None = None
+    height: float | None = None
+    z_index: int = 0
+
+
+class CanvasLayoutBulkRequest(BaseModel):
+    updates: list[CanvasLayoutUpdate]
+
+
+class CanvasLayoutBulkResponse(BaseModel):
+    written: int
