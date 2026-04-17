@@ -4,10 +4,16 @@ import remarkGfm from "remark-gfm";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 
+interface Citation {
+  entity_id: string;
+  name: string;
+  entity_type: string;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
-  citations?: { page_id: string; title: string }[];
+  citations?: Citation[];
 }
 
 export default function Chat() {
@@ -35,7 +41,7 @@ export default function Chat() {
 
     try {
       let fullText = "";
-      let citations: { page_id: string; title: string }[] = [];
+      let citations: Citation[] = [];
 
       for await (const chunk of api.chat(userMessage)) {
         if (chunk.text) {
@@ -83,7 +89,7 @@ export default function Chat() {
           {messages.length === 0 && (
             <div className="text-center text-m3-muted py-20">
               <p className="text-xl mb-2">Ask your knowledge base anything</p>
-              <p className="text-sm">Your wiki pages are used as context for answers</p>
+              <p className="text-sm">Your entity knowledge graph is used as context for answers</p>
             </div>
           )}
           {messages.map((msg, i) => (
@@ -102,11 +108,11 @@ export default function Chat() {
                   <div className="mt-3 pt-2 border-t border-m3-border flex flex-wrap gap-1">
                     {msg.citations.map((c) => (
                       <button
-                        key={c.page_id}
-                        onClick={() => navigate(`/wiki/${c.page_id}`)}
+                        key={c.entity_id}
+                        onClick={() => navigate(`/entities/${c.entity_id}`)}
                         className="text-xs bg-m3-bg px-2 py-1 rounded hover:bg-m3-border transition-colors"
                       >
-                        {c.title}
+                        {c.name}
                       </button>
                     ))}
                   </div>

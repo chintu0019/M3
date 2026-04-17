@@ -46,71 +46,6 @@ class RawItemResponse(BaseModel):
     processed_at: datetime | None
 
 
-# --- Wiki ---
-
-
-class WikiPageSummary(BaseModel):
-    id: uuid.UUID
-    title: str
-    category: str | None
-    page_type: str | None
-    tags: list[str]
-    confidence: float
-    created_at: datetime
-    updated_at: datetime
-
-
-class WikiPageResponse(WikiPageSummary):
-    content: str
-    source_items: list[uuid.UUID]
-    metadata: dict
-    linked_pages: list["LinkedPageInfo"] = Field(default_factory=list)
-
-
-class LinkedPageInfo(BaseModel):
-    id: uuid.UUID
-    title: str
-    link_type: str
-    direction: str  # "outgoing" or "incoming"
-
-
-class SearchResultResponse(BaseModel):
-    page_id: uuid.UUID
-    title: str
-    snippet: str
-    score: float
-    category: str | None
-
-
-class GraphNode(BaseModel):
-    id: uuid.UUID
-    title: str
-    category: str | None
-    page_type: str | None
-    tags: list[str]
-    connection_count: int
-
-
-class GraphEdge(BaseModel):
-    source_id: uuid.UUID
-    target_id: uuid.UUID
-    link_type: str
-    weight: float
-
-
-class GraphResponse(BaseModel):
-    nodes: list[GraphNode]
-    edges: list[GraphEdge]
-
-
-class ChangelogResponse(BaseModel):
-    id: uuid.UUID
-    action: str | None
-    page_id: uuid.UUID | None
-    description: str | None
-    created_at: datetime
-
-
 # --- Chat ---
 
 
@@ -138,19 +73,8 @@ class ItemNoteUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=10000)
 
 
-class WikiPageLinkedToItem(BaseModel):
-    id: uuid.UUID
-    title: str
-    category: str | None
-    page_type: str | None
-    tags: list[str] = Field(default_factory=list)
-    confidence: float = 0.0
-    updated_at: datetime
-
-
 class ItemDetailResponse(RawItemResponse):
     notes: list[ItemNoteResponse] = Field(default_factory=list)
-    linked_wiki_pages: list[WikiPageLinkedToItem] = Field(default_factory=list)
 
 
 class ItemPatchRequest(BaseModel):

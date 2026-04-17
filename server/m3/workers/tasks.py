@@ -1,5 +1,5 @@
 """
-M3 ARQ Tasks -- background job definitions for the worker.
+M3 ARQ Tasks — background job definitions for the worker.
 """
 
 import logging
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from arq import cron
-from sqlalchemy import or_, update
+from sqlalchemy import or_, select, update
 
 from m3.config import LLMProviderConfig, load_settings
 from m3.core.compiler import Compiler
@@ -25,27 +25,13 @@ logger = logging.getLogger("m3.worker")
 
 
 async def process_item(ctx: dict, item_id: str) -> None:
-    """Process a single raw item through the compilation pipeline."""
+    """Process a single raw item through the entity pipeline."""
     compiler: Compiler = ctx["compiler"]
     await compiler.process_item(uuid.UUID(item_id))
 
 
-async def compile_pass(ctx: dict) -> None:
-    """Process all pending items."""
-    compiler: Compiler = ctx["compiler"]
-    count = await compiler.run_compile_pass()
-    logger.info(f"Compile pass finished: {count} items")
-
-
-async def deep_compile(ctx: dict) -> None:
-    """Weekly deep synthesis of the entire wiki."""
-    compiler: Compiler = ctx["compiler"]
-    await compiler.run_deep_compile()
-
-
 async def render_dirty_entities_task(ctx: dict) -> None:
-    """Regenerate wiki-style pages for any entity that accumulated new
-    facts since the last render. Phase 3 cron — runs every 5 minutes."""
+    """Regenerate entity pages that accumulated new facts. Every 5 minutes."""
     from m3.core.entity_renderer import render_dirty_entities
     compiler: Compiler = ctx["compiler"]
     n = await render_dirty_entities(
@@ -62,8 +48,7 @@ async def render_dirty_entities_task(ctx: dict) -> None:
 
 async def consolidate_types_task(ctx: dict) -> None:
     """Ask the engine to merge near-duplicate rows in the type dim tables
-    and rewrite base rows onto the canonical survivor. Phase 3 cron —
-    runs daily."""
+    and rewrite base rows onto the canonical survivor. Daily at 04:00 UTC."""
     from m3.core.type_consolidator import consolidate_types
     compiler: Compiler = ctx["compiler"]
     summary = await consolidate_types(db=compiler.db, engine=compiler.engine)
@@ -71,12 +56,30 @@ async def consolidate_types_task(ctx: dict) -> None:
         logger.info(f"Type consolidation applied: {summary}")
 
 
+async def drain_pending_items(ctx: dict) -> int:
+    """Process any raw_items still in 'pending' — catches items whose ARQ
+    job was lost (worker crashed between enqueue and run). Called on startup."""
+    compiler: Compiler = ctx["compiler"]
+    async with compiler.db() as session:
+        result = await session.execute(
+            select(RawItem.id)
+            .where(RawItem.status == "pending")
+            .order_by(RawItem.created_at)
+        )
+        item_ids = [row[0] for row in result.all()]
+
+    for item_id in item_ids:
+        await compiler.process_item(item_id)
+    if item_ids:
+        logger.info(f"Drained {len(item_ids)} pending items on startup")
+    return len(item_ids)
+
+
 async def startup(ctx: dict) -> None:
     """Initialize all dependencies for the worker process."""
     logger.info("Worker starting up...")
     settings = load_settings()
 
-    # Merge user-configured providers (same as server lifespan)
     user_store = UserSettingsStore(Path(settings.data_dir) / "user_settings.json")
     for name, provider_data in user_store.get_providers().items():
         settings.llm.providers[name] = LLMProviderConfig(**provider_data)
@@ -98,7 +101,6 @@ async def startup(ctx: dict) -> None:
         engine=compilation_engine,
         llm=llm,
         embedder=embedder,
-        wiki_mode=settings.processing.wiki_mode,
     )
 
     ctx["compiler"] = compiler
@@ -106,10 +108,7 @@ async def startup(ctx: dict) -> None:
     ctx["settings"] = settings
 
     # Reap zombie 'processing' items from a previous worker that crashed
-    # mid-job. Reset them to 'pending' so the next compile_pass (hourly cron,
-    # or the immediate pass below) picks them up. Two cases caught: items with
-    # no processing_started_at (older data pre-Task 10) and items whose stamp
-    # is older than STALE_PROCESSING_THRESHOLD.
+    # mid-job. Reset to 'pending' so the drain pass below picks them up.
     cutoff = datetime.now(timezone.utc) - STALE_PROCESSING_THRESHOLD
     async with session_factory() as session:
         result = await session.execute(
@@ -127,10 +126,7 @@ async def startup(ctx: dict) -> None:
         if result.rowcount:
             logger.warning(f"Recovered {result.rowcount} zombie processing items")
 
-    # Also run an immediate compile pass so unstuck items (and any backlog
-    # accumulated while the worker was down) start processing right away
-    # rather than waiting up to an hour for the cron.
-    await compiler.run_compile_pass()
+    await drain_pending_items(ctx)
 
     logger.info("Worker ready")
 
@@ -147,8 +143,6 @@ class WorkerSettings:
 
     functions = [process_item, render_dirty_entities_task, consolidate_types_task]
     cron_jobs = [
-        cron(compile_pass, minute={0}),  # Every hour on the hour
-        cron(deep_compile, weekday={6}, hour={3}, minute={0}),  # Sunday 3am
         cron(render_dirty_entities_task, minute=set(range(0, 60, 5))),  # Every 5 min
         cron(consolidate_types_task, hour={4}, minute={0}),  # Daily at 04:00 UTC
     ]

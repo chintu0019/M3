@@ -54,8 +54,6 @@ llm:
 processing:
   engine: basic
   # engine_path: /path/to/custom/engine.py  # For custom engines
-  auto_compile: true
-  compile_interval_minutes: 60
 
 capture:
   telegram:

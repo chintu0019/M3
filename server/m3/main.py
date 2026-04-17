@@ -20,7 +20,6 @@ from m3.api.ingest import router as ingest_router
 from m3.api.insights import router as insights_router
 from m3.api.library import router as library_router
 from m3.api.settings import router as settings_router
-from m3.api.wiki import router as wiki_router
 from m3.config import load_settings
 from m3.core.engines.loader import load_engine
 from m3.core.llm import create_embedding_provider, create_llm_provider
@@ -147,7 +146,6 @@ app.add_middleware(
 
 
 app.include_router(ingest_router)
-app.include_router(wiki_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
 app.include_router(library_router)

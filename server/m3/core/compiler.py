@@ -1,7 +1,8 @@
 """
-M3 Compiler -- the processing pipeline orchestrator.
+M3 Compiler — the processing pipeline orchestrator.
 
-Takes raw items through: extract -> classify -> find related -> compile -> write wiki -> update links.
+Takes raw items through: content extraction -> engine.extract() -> entity
+resolution -> persist facts + fact-links + entity-links -> find_insights.
 """
 
 import asyncio
@@ -9,7 +10,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, text
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -19,10 +20,8 @@ from m3.core.engines.base import (
     ContentBlock,
     ContentType,
     EntityMention,
-    ExtractedFact,
     ExtractionResult,
     ImageBlock,
-    ProposedRelationship,
     TextBlock,
 )
 from m3.core.entity_resolver import resolve as resolve_entity
@@ -40,7 +39,6 @@ from m3.core.extractors import (
 from m3.core.llm import EmbeddingProvider, LLMProvider, make_content_blocks
 from m3.storage.files import FileStore
 from m3.storage.models import (
-    Changelog,
     Entity,
     EntityFact,
     EntityFactLink,
@@ -50,9 +48,6 @@ from m3.storage.models import (
     FactTypeVocab,
     ItemNote,
     RawItem,
-    WikiLink,
-    WikiPage,
-    WikiSchema,
 )
 
 logger = logging.getLogger("m3.compiler")
@@ -66,25 +61,21 @@ class Compiler:
         engine: CompilationEngine,
         llm: LLMProvider,
         embedder: EmbeddingProvider,
-        wiki_mode: str = "document",
     ):
         self.db = db
         self.files = files
         self.engine = engine
         self.llm = llm
         self.embedder = embedder
-        self.wiki_mode = wiki_mode
 
     async def process_item(self, item_id: uuid.UUID) -> None:
-        """Full processing pipeline for a single raw item."""
+        """Entity-centric pipeline for a single raw item."""
         async with self.db() as session:
             try:
                 item = await session.get(RawItem, item_id)
                 if not item:
-                    # Belt-and-braces for enqueue-before-commit races. All
-                    # known producers now commit before enqueueing, but a
-                    # replication lag or a caller we missed shouldn't lose
-                    # the item. One short retry clears any real race.
+                    # Belt-and-braces for enqueue-before-commit races. One
+                    # short retry clears any producer that forgot to commit.
                     await asyncio.sleep(0.5)
                     item = await session.get(RawItem, item_id)
                 if not item:
@@ -95,7 +86,6 @@ class Compiler:
                 item.processing_started_at = datetime.now(timezone.utc)
                 await session.commit()
 
-                # Load notes for this item (user corrections / additional context)
                 notes_result = await session.execute(
                     select(ItemNote).where(ItemNote.item_id == item_id).order_by(ItemNote.created_at)
                 )
@@ -106,7 +96,6 @@ class Compiler:
                         f"Note (added {n.created_at.isoformat()}):\n{n.content}" for n in notes
                     )
 
-                # 1. Extract content (text form, always) and multimodal blocks
                 content = await self._extract_content(item)
                 if not content:
                     item.status = "error"
@@ -123,54 +112,39 @@ class Compiler:
                     else ContentType.TEXT
                 )
 
-                # Build multimodal blocks for engines that can consume them.
                 content_blocks = await self._build_content_blocks(item, content)
 
-                mode = (self.wiki_mode or "document").lower()
-                if mode not in ("document", "entity", "both"):
-                    logger.warning(f"Unknown wiki_mode={mode!r}; falling back to 'document'")
-                    mode = "document"
+                capabilities = getattr(self.engine, "capabilities", None)
+                wants_multimodal = bool(capabilities and capabilities.multimodal) and any(
+                    isinstance(b, (ImageBlock, AudioBlock)) for b in content_blocks
+                )
+                extract_input: str | list[ContentBlock] = (
+                    content_blocks if wants_multimodal else content
+                )
 
-                changelog_entries: list[str] = []
+                extraction = await self.engine.extract(
+                    content=extract_input, content_type=content_type, user_notes=user_notes,
+                )
+                n_facts, touched_ids = await self._persist_extraction(session, item, extraction)
 
-                if mode in ("document", "both"):
+                if touched_ids:
                     try:
-                        entry = await self._run_document_mode(
-                            session, item, content, content_type, user_notes,
+                        await find_insights_for_touched(
+                            session, self.engine, touched_ids,
                         )
-                        if entry:
-                            changelog_entries.append(entry)
                     except Exception:
-                        if mode == "both":
-                            logger.exception("document-mode failed in both mode; continuing")
-                        else:
-                            raise
+                        logger.exception("find_insights raised; ingest continues")
 
-                if mode in ("entity", "both"):
-                    try:
-                        entry = await self._run_entity_mode(
-                            session, item, content, content_blocks, content_type, user_notes,
-                        )
-                        if entry:
-                            changelog_entries.append(entry)
-                    except Exception:
-                        if mode == "both":
-                            logger.exception("entity-mode failed in both mode; continuing")
-                        else:
-                            raise
-
-                for entry in changelog_entries:
-                    session.add(Changelog(action="compiled", description=entry))
-
-                # Mark done
                 item.status = "done"
                 item.processed_at = datetime.now(timezone.utc)
                 await session.commit()
-                logger.info(f"Processed item {item_id} in wiki_mode={mode}")
+                logger.info(
+                    f"Processed item {item_id}: {len(extraction.entities)} entities, "
+                    f"{n_facts} facts, {len(extraction.relationships or [])} relationships"
+                )
 
             except Exception as e:
                 await session.rollback()
-                # Re-fetch item in new transaction to update status
                 async with self.db() as err_session:
                     err_item = await err_session.get(RawItem, item_id)
                     if err_item:
@@ -179,186 +153,12 @@ class Compiler:
                         await err_session.commit()
                 logger.exception(f"Failed to process item {item_id}")
 
-    async def run_compile_pass(self) -> int:
-        """Process all pending items. Returns count processed."""
-        async with self.db() as session:
-            result = await session.execute(
-                select(RawItem.id)
-                .where(RawItem.status == "pending")
-                .order_by(RawItem.created_at)
-            )
-            item_ids = [row[0] for row in result.all()]
-
-        count = 0
-        for item_id in item_ids:
-            await self.process_item(item_id)
-            count += 1
-
-        logger.info(f"Compile pass complete: {count} items processed")
-        return count
-
-    async def run_deep_compile(self) -> None:
-        """Weekly deep synthesis -- cross-reference entire wiki."""
-        async with self.db() as session:
-            wiki_index = await self._get_wiki_index(session)
-            wiki_schema = await self._get_wiki_schema(session)
-
-            # Get recent changelog
-            result = await session.execute(
-                select(Changelog.description)
-                .order_by(Changelog.created_at.desc())
-                .limit(50)
-            )
-            recent_changes = [row[0] for row in result.all() if row[0]]
-
-            # Get all page summaries
-            result = await session.execute(
-                select(WikiPage.id, WikiPage.title, WikiPage.category, WikiPage.content)
-                .where(WikiPage.page_type != "_index")
-            )
-            all_summaries = [
-                {
-                    "id": str(row[0]),
-                    "title": row[1],
-                    "category": row[2],
-                    "summary": row[3][:200] if row[3] else "",
-                }
-                for row in result.all()
-            ]
-
-        if not all_summaries:
-            logger.info("No pages to synthesize")
-            return
-
-        # Run synthesis
-        synthesis = await self.engine.synthesize(
-            wiki_index=wiki_index,
-            wiki_schema=wiki_schema,
-            recent_changes=recent_changes,
-            all_page_summaries=all_summaries,
-        )
-
-        # Apply results
-        async with self.db() as session:
-            for link_update in synthesis.new_links:
-                await self._upsert_link(session, link_update)
-
-            if synthesis.schema_updates:
-                session.add(WikiSchema(content=synthesis.schema_updates))
-
-            for entry in synthesis.changelog_entries:
-                session.add(Changelog(action="synthesized", description=entry))
-
-            await session.commit()
-
-        # Update index
-        async with self.db() as session:
-            await self._update_wiki_index(session)
-            await session.commit()
-
-        logger.info(
-            f"Deep compile complete: {len(synthesis.new_links)} new links, "
-            f"{len(synthesis.insights)} insights"
-        )
-
-    # --- Mode helpers ---
-
-    async def _run_document_mode(
-        self,
-        session: AsyncSession,
-        item: RawItem,
-        content: str,
-        content_type: ContentType,
-        user_notes: str | None,
-    ) -> str:
-        """Legacy per-item wiki-page compilation path."""
-        wiki_index = await self._get_wiki_index(session)
-        wiki_schema = await self._get_wiki_schema(session)
-        existing_tags = await self._get_existing_tags(session)
-        existing_projects = await self._get_existing_projects(session)
-
-        classification = await self.engine.classify(
-            content=content,
-            content_type=content_type,
-            wiki_index=wiki_index,
-            wiki_schema=wiki_schema,
-            existing_tags=existing_tags,
-            existing_projects=existing_projects,
-            user_tags=item.user_tags,
-            user_project=item.user_project,
-            user_notes=user_notes,
-        )
-        related_pages = await self._find_related_pages(session, content)
-        compile_result = await self.engine.compile(
-            classified_item=classification,
-            original_content=content,
-            related_pages=related_pages,
-            wiki_schema=wiki_schema,
-            user_notes=user_notes,
-        )
-        for pu in compile_result.pages:
-            await self._write_page(session, pu, item.id)
-        for lu in compile_result.links:
-            await self._upsert_link(session, lu)
-        await self._update_wiki_index(session)
-        if compile_result.schema_updates:
-            session.add(WikiSchema(content=compile_result.schema_updates))
-        return compile_result.changelog_entry or "Content compiled"
-
-    async def _run_entity_mode(
-        self,
-        session: AsyncSession,
-        item: RawItem,
-        content: str,
-        content_blocks: list[ContentBlock],
-        content_type: ContentType,
-        user_notes: str | None,
-    ) -> str:
-        """Entity extraction path: facts into entity pages, not summary pages."""
-        capabilities = getattr(self.engine, "capabilities", None)
-        wants_multimodal = bool(capabilities and capabilities.multimodal) and any(
-            isinstance(b, (ImageBlock, AudioBlock)) for b in content_blocks
-        )
-        extract_input: str | list[ContentBlock] = (
-            content_blocks if wants_multimodal else content
-        )
-        try:
-            extraction = await self.engine.extract(
-                content=extract_input, content_type=content_type, user_notes=user_notes,
-            )
-        except NotImplementedError:
-            logger.warning("Engine does not support extract(); skipping entity mode")
-            return ""
-        n, touched_ids = await self._persist_extraction(session, item, extraction)
-        rel_count = len(extraction.relationships or [])
-
-        # Insight pass — best-effort. Failure never blocks ingest.
-        insight_count = 0
-        if touched_ids:
-            try:
-                insight_count = await find_insights_for_touched(
-                    session, self.engine, touched_ids,
-                )
-            except Exception:
-                logger.exception("find_insights raised; ingest continues")
-
-        summary = (
-            f"Extracted {len(extraction.entities)} entities, {n} facts, "
-            f"{rel_count} relationships"
-        )
-        if insight_count:
-            summary += f", {insight_count} insights"
-        return summary
-
     async def _build_content_blocks(
         self, item: RawItem, text_content: str,
     ) -> list[ContentBlock]:
-        """Produce the multimodal ContentBlock list for this item when the
-        underlying LLM is multimodal. For plain-text items we return the text
-        as a single TextBlock so the engine has a consistent input shape."""
+        """Build the multimodal ContentBlock list for engines that support it."""
         blocks: list[ContentBlock] = []
 
-        # Image / audio get raw bytes if the LLM is vision/audio-capable.
         if item.content_type == "image" and item.file_path and self.llm.supports_vision:
             try:
                 image_bytes = await self.files.download(item.file_path)
@@ -380,8 +180,6 @@ class Compiler:
 
         return blocks
 
-    # --- Entity persistence ---
-
     async def _persist_extraction(
         self,
         session: AsyncSession,
@@ -393,7 +191,6 @@ class Compiler:
         if not extraction.entities and not extraction.facts:
             return 0, []
 
-        # 1) Resolve every mention up front so facts can reuse the cache.
         resolved: dict[tuple[str, str], Entity] = {}
         for mention in extraction.entities:
             outcome = await resolve_entity(session, self.embedder, self.llm, mention)
@@ -403,7 +200,6 @@ class Compiler:
                 resolved.setdefault((alias.lower(), mention.entity_type.lower()), outcome.entity)
             await self._bump_type_vocab(session, EntityTypeVocab, outcome.entity.entity_type)
 
-        # 2) Facts + fact-links.
         pair_counts: dict[frozenset, int] = {}
         persisted_facts = 0
         for ef in extraction.facts:
@@ -421,12 +217,10 @@ class Compiler:
             await session.flush()
             await self._bump_type_vocab(session, FactTypeVocab, ef.fact_type)
 
-            # Two passes: (1) resolve every ref and pick the strongest
-            # role when the LLM emits the same entity twice in one fact;
-            # (2) emit one fact-link row per unique entity. The PK on
-            # entity_fact_links is (fact_id, entity_id), so duplicate
-            # (entity, fact) pairs with different roles would otherwise
-            # violate it.
+            # Two passes: pick the strongest role when the LLM emits the same
+            # entity twice in one fact, then emit one fact-link per unique
+            # entity. The PK on entity_fact_links is (fact_id, entity_id),
+            # which a naive loop would violate.
             role_rank = {
                 "subject": 3, "attributed_to": 2,
                 "location": 1, "time": 1, "mentioned": 0,
@@ -465,7 +259,6 @@ class Compiler:
             linked_entity_ids: list[uuid.UUID] = []
             for eid in ordered_ids:
                 role = best_role[eid]
-                # Find the Entity row we already resolved so we can mark dirty.
                 ent = next(e for e in resolved.values() if e.id == eid)
                 session.add(EntityFactLink(fact_id=fact.id, entity_id=eid, role=role))
                 await self._bump_type_vocab(session, FactRoleVocab, role)
@@ -475,7 +268,6 @@ class Compiler:
 
             persisted_facts += 1
 
-            # Co-occurrence pairs (fallback graph signal).
             uniq = list(dict.fromkeys(linked_entity_ids))
             for i in range(len(uniq)):
                 for j in range(i + 1, len(uniq)):
@@ -484,21 +276,15 @@ class Compiler:
 
         await session.flush()
 
-        # 3) Upsert co-occurrence entity_links.
         for pair, count in pair_counts.items():
             a, b = sorted(pair, key=lambda x: str(x))
             await self._upsert_entity_link(session, a, b, "related", count)
 
-        # 4) Engine-proposed semantic relationships. Resolve names against the
-        # per-item cache; relationships referencing unknown entities are skipped
-        # rather than creating silent new rows.
         for rel in extraction.relationships or []:
             src = resolved.get((rel.source_name.lower(), rel.source_type.lower()))
             tgt = resolved.get((rel.target_name.lower(), rel.target_type.lower()))
             if src is None or tgt is None or src.id == tgt.id:
                 continue
-            # Canonical ordering for undirected link types; directed types keep
-            # the engine's direction.
             undirected = rel.link_type in {"related", "contradicts"}
             if undirected:
                 a, b = sorted([src.id, tgt.id], key=lambda x: str(x))
@@ -537,7 +323,6 @@ class Compiler:
             link.weight = (link.weight or 0) + weight_delta
 
     async def _bump_type_vocab(self, session: AsyncSession, model, name: str) -> None:
-        """Increment usage_count for a type value; insert if missing."""
         if not name:
             return
         stmt = pg_insert(model.__table__).values(name=name, usage_count=1).on_conflict_do_update(
@@ -545,8 +330,6 @@ class Compiler:
             set_={"usage_count": model.__table__.c.usage_count + 1},
         )
         await session.execute(stmt)
-
-    # --- Private helpers ---
 
     async def _extract_content(self, item: RawItem) -> str:
         """Extract text content from a raw item based on its type."""
@@ -578,18 +361,16 @@ class Compiler:
             return await extract_html(html_bytes)
 
         if item.content_type == "file" and item.file_path:
-            # Generic file -- dispatch by extension
             file_bytes = await self.files.download(item.file_path)
             filename = item.file_path.rsplit("/", 1)[-1]
             extracted = await extract_by_filename(file_bytes, filename)
             if extracted:
                 return extracted
-            # Fallback to any user-provided text
             return item.content_text or ""
 
         if item.content_type == "image" and item.file_path:
             image_bytes = await self.files.download(item.file_path)
-            mime = "image/jpeg"  # Default; could be improved with actual detection
+            mime = "image/jpeg"
             blocks = make_content_blocks(
                 text="Describe this image in detail. Extract all visible text.",
                 image_bytes=image_bytes,
@@ -602,7 +383,7 @@ class Compiler:
 
         if item.content_type in ("audio", "voice") and item.file_path:
             audio_bytes = await self.files.download(item.file_path)
-            mime = "audio/mp4"  # Default
+            mime = "audio/mp4"
             blocks = make_content_blocks(
                 text="Transcribe this audio. Include a brief summary.",
                 audio_bytes=audio_bytes,
@@ -613,222 +394,7 @@ class Compiler:
                 max_tokens=4000,
             )
 
-        # Default: use content_text directly
         return item.content_text or ""
-
-    async def _get_wiki_index(self, session: AsyncSession) -> str:
-        result = await session.execute(
-            select(WikiPage.content).where(WikiPage.page_type == "_index")
-        )
-        row = result.first()
-        return row[0] if row else ""
-
-    async def _get_wiki_schema(self, session: AsyncSession) -> str:
-        result = await session.execute(
-            select(WikiSchema.content).order_by(WikiSchema.id.desc()).limit(1)
-        )
-        row = result.first()
-        return row[0] if row else ""
-
-    async def _get_existing_tags(self, session: AsyncSession) -> list[str]:
-        result = await session.execute(
-            text("SELECT DISTINCT unnest(tags) AS tag FROM wiki_pages ORDER BY tag")
-        )
-        return [row[0] for row in result.all()]
-
-    async def _get_existing_projects(self, session: AsyncSession) -> list[str]:
-        result = await session.execute(
-            select(WikiPage.category).where(WikiPage.category.isnot(None)).distinct()
-        )
-        return [row[0] for row in result.all()]
-
-    async def _find_related_pages(
-        self, session: AsyncSession, content: str, limit: int = 5
-    ) -> list[dict]:
-        """Find related pages via vector similarity + FTS, merged with RRF."""
-        # Embed the content
-        try:
-            embeddings = await self.embedder.embed([content[:2000]])
-            query_embedding = embeddings[0]
-        except Exception:
-            logger.warning("Embedding failed, falling back to FTS only")
-            query_embedding = None
-
-        vector_results = []
-        if query_embedding:
-            result = await session.execute(
-                select(WikiPage.id, WikiPage.title, WikiPage.content, WikiPage.category)
-                .where(WikiPage.embedding.isnot(None))
-                .where(WikiPage.page_type != "_index")
-                .order_by(WikiPage.embedding.cosine_distance(query_embedding))
-                .limit(limit * 2)
-            )
-            vector_results = list(result.all())
-
-        # FTS search
-        search_terms = " ".join(content.split()[:20])
-        fts_results = []
-        if search_terms.strip():
-            result = await session.execute(
-                select(WikiPage.id, WikiPage.title, WikiPage.content, WikiPage.category)
-                .where(WikiPage.page_type != "_index")
-                .where(
-                    func.to_tsvector("english", func.coalesce(WikiPage.title, "") + " " + func.coalesce(WikiPage.content, ""))
-                    .match(search_terms)
-                )
-                .limit(limit * 2)
-            )
-            fts_results = list(result.all())
-
-        # Merge via RRF
-        scores: dict[uuid.UUID, float] = {}
-        page_data: dict[uuid.UUID, dict] = {}
-        k = 60
-
-        for rank, row in enumerate(vector_results):
-            page_id = row[0]
-            scores[page_id] = scores.get(page_id, 0) + 1 / (k + rank)
-            page_data[page_id] = {
-                "id": str(page_id),
-                "title": row[1],
-                "content": row[2],
-                "category": row[3],
-            }
-
-        for rank, row in enumerate(fts_results):
-            page_id = row[0]
-            scores[page_id] = scores.get(page_id, 0) + 1 / (k + rank)
-            if page_id not in page_data:
-                page_data[page_id] = {
-                    "id": str(page_id),
-                    "title": row[1],
-                    "content": row[2],
-                    "category": row[3],
-                }
-
-        sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:limit]
-        return [page_data[pid] for pid in sorted_ids]
-
-    async def _write_page(
-        self, session: AsyncSession, page_update, source_item_id: uuid.UUID
-    ) -> WikiPage:
-        """Create or update a wiki page from a PageUpdate."""
-        # Embed the page content
-        try:
-            embeddings = await self.embedder.embed([f"{page_update.title}\n{page_update.content[:2000]}"])
-            embedding = embeddings[0]
-        except Exception:
-            logger.warning(f"Failed to embed page '{page_update.title}'")
-            embedding = None
-
-        if page_update.page_id:
-            # Update existing page
-            try:
-                existing_id = uuid.UUID(page_update.page_id)
-            except ValueError:
-                existing_id = None
-
-            if existing_id:
-                page = await session.get(WikiPage, existing_id)
-                if page:
-                    page.content = page_update.content
-                    page.category = page_update.category
-                    page.tags = page_update.tags
-                    page.confidence = page_update.confidence
-                    page.embedding = embedding
-                    if source_item_id not in (page.source_items or []):
-                        page.source_items = (page.source_items or []) + [source_item_id]
-                    return page
-
-        # Create new page
-        page = WikiPage(
-            title=page_update.title,
-            content=page_update.content,
-            category=page_update.category,
-            page_type=page_update.page_type,
-            tags=page_update.tags,
-            confidence=page_update.confidence,
-            embedding=embedding,
-            source_items=[source_item_id],
-        )
-        session.add(page)
-        await session.flush()
-        return page
-
-    async def _upsert_link(self, session: AsyncSession, link_update) -> None:
-        """Create a wiki link, resolving page titles to IDs."""
-        source = await session.execute(
-            select(WikiPage.id).where(WikiPage.title == link_update.source_title).limit(1)
-        )
-        target = await session.execute(
-            select(WikiPage.id).where(WikiPage.title == link_update.target_title).limit(1)
-        )
-
-        source_row = source.first()
-        target_row = target.first()
-
-        if not source_row or not target_row:
-            return
-
-        stmt = pg_insert(WikiLink).values(
-            source_page_id=source_row[0],
-            target_page_id=target_row[0],
-            link_type=link_update.link_type,
-            weight=link_update.weight,
-        ).on_conflict_do_update(
-            constraint="wiki_links_source_page_id_target_page_id_link_type_key",
-            set_={"weight": link_update.weight},
-        )
-        await session.execute(stmt)
-
-    async def _update_wiki_index(self, session: AsyncSession) -> None:
-        """Regenerate the wiki index page deterministically (no LLM call)."""
-        result = await session.execute(
-            select(WikiPage.title, WikiPage.category, WikiPage.page_type)
-            .where(WikiPage.page_type != "_index")
-            .order_by(WikiPage.category, WikiPage.title)
-        )
-        pages = result.all()
-
-        if not pages:
-            return
-
-        # Group by category
-        categories: dict[str, list[str]] = {}
-        for title, category, _page_type in pages:
-            cat = category or "Uncategorized"
-            if cat not in categories:
-                categories[cat] = []
-            categories[cat].append(title)
-
-        # Build index markdown
-        lines = ["# M3 Wiki Index\n"]
-        for cat in sorted(categories.keys()):
-            lines.append(f"## {cat}\n")
-            for title in sorted(categories[cat]):
-                lines.append(f"- {title}")
-            lines.append("")
-
-        index_content = "\n".join(lines)
-
-        # Upsert index page
-        existing = await session.execute(
-            select(WikiPage).where(WikiPage.page_type == "_index")
-        )
-        index_page = existing.scalar_one_or_none()
-
-        if index_page:
-            index_page.content = index_content
-        else:
-            session.add(WikiPage(
-                title="Wiki Index",
-                content=index_content,
-                page_type="_index",
-                tags=[],
-                confidence=1.0,
-            ))
-
-        await session.flush()
 
 
 # --- Module-level helpers ---

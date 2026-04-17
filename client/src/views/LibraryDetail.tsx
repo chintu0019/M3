@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type ItemDetail } from "../api/client";
-import ClassificationCard from "../components/detail/ClassificationCard";
 import ErrorCard from "../components/detail/ErrorCard";
 import ExtractedContent from "../components/detail/ExtractedContent";
 import FilePreview from "../components/detail/FilePreview";
 import NotesPanel from "../components/detail/NotesPanel";
 import ProcessingTimeline from "../components/detail/ProcessingTimeline";
-import WikiPagesList from "../components/detail/WikiPagesList";
+import UserInputsCard from "../components/detail/UserInputsCard";
 import StatusBadge from "../components/library/StatusBadge";
 
 export default function LibraryDetail() {
@@ -104,13 +103,8 @@ export default function LibraryDetail() {
           ) : (
             <FilePreview item={item} />
           )}
-          <ClassificationCard
-            linkedPages={item.linked_wiki_pages}
-            userTags={item.user_tags}
-            userProject={item.user_project}
-          />
+          <UserInputsCard userTags={item.user_tags} userProject={item.user_project} />
           <ExtractedContent content={item.content_text} />
-          <WikiPagesList pages={item.linked_wiki_pages} />
           <ProcessingTimeline item={item} />
         </div>
 

@@ -3,7 +3,6 @@ import { Navigate, Route, Routes, NavLink } from "react-router-dom";
 import { api } from "./api/client";
 import Library from "./views/Library";
 import LibraryDetail from "./views/LibraryDetail";
-import Wiki from "./views/Wiki";
 import Entities from "./views/Entities";
 import Graph from "./views/Graph";
 import Insights from "./views/Insights";
@@ -32,9 +31,6 @@ function Nav({ activeModel }: { activeModel: string | null }) {
       </NavLink>
       <NavLink to="/insights" className={linkClass}>
         Insights
-      </NavLink>
-      <NavLink to="/wiki" className={linkClass}>
-        Wiki
       </NavLink>
       <NavLink to="/chat" className={linkClass}>
         Chat
@@ -86,8 +82,6 @@ export default function App() {
           <Route path="/entities/:entityId" element={<Entities />} />
           <Route path="/graph" element={<Graph />} />
           <Route path="/insights" element={<Insights />} />
-          <Route path="/wiki" element={<Wiki />} />
-          <Route path="/wiki/:pageId" element={<Wiki />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

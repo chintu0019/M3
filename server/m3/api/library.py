@@ -24,10 +24,9 @@ from m3.schemas.api import (
     ItemNoteUpdate,
     ItemPatchRequest,
     LibraryStatsResponse,
-    WikiPageLinkedToItem,
 )
 from m3.storage.files import FileStore
-from m3.storage.models import ItemNote, RawItem, WikiPage
+from m3.storage.models import ItemNote, RawItem
 
 logger = logging.getLogger("m3.library")
 
@@ -52,25 +51,6 @@ async def _build_detail_response(
         for n in notes_result.scalars().all()
     ]
 
-    # Linked wiki pages (any wiki page that includes this item.id in source_items)
-    linked_result = await db.execute(
-        select(WikiPage)
-        .where(WikiPage.source_items.any(item.id))
-        .where(WikiPage.page_type != "_index")
-    )
-    linked_pages = [
-        WikiPageLinkedToItem(
-            id=p.id,
-            title=p.title,
-            category=p.category,
-            page_type=p.page_type,
-            tags=p.tags or [],
-            confidence=p.confidence,
-            updated_at=p.updated_at,
-        )
-        for p in linked_result.scalars().all()
-    ]
-
     file_url = await files.get_url(item.file_path) if item.file_path else None
 
     return ItemDetailResponse(
@@ -89,7 +69,6 @@ async def _build_detail_response(
         processing_started_at=item.processing_started_at,
         processed_at=item.processed_at,
         notes=notes,
-        linked_wiki_pages=linked_pages,
     )
 
 

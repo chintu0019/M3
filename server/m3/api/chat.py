@@ -1,5 +1,5 @@
 """
-M3 Chat API -- streaming SSE chat grounded in wiki content.
+M3 Chat API — streaming SSE chat grounded in the entity knowledge graph.
 """
 
 import json
@@ -7,49 +7,64 @@ import re
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from m3.api.deps import verify_auth
 from m3.core.search import SearchEngine
 from m3.schemas.api import ChatRequest
-from m3.storage.models import WikiPage
+from m3.storage.models import Entity
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 
-def _format_context(pages: list[dict]) -> str:
-    """Format wiki pages into context for the LLM."""
+def _format_context(entities: list[dict]) -> str:
+    """Render each entity block with its type header + page_content (or overview)."""
     parts = []
-    for p in pages:
-        parts.append(f"### [[{p['title']}]]\n{p['content']}")
+    for e in entities:
+        body = e.get("page_content") or e.get("page_overview") or e.get("description") or ""
+        parts.append(f"### [[{e['name']}]] ({e['type']})\n{body}")
     return "\n\n---\n\n".join(parts)
 
 
 async def _resolve_citations(
-    db_factory, full_text: str
+    db_factory: async_sessionmaker, full_text: str
 ) -> list[dict]:
-    """Find [[Page Title]] citations in the response and resolve to page IDs."""
-    pattern = re.findall(r"\[\[(.+?)\]\]", full_text)
-    if not pattern:
+    """Resolve [[Name]] mentions in the LLM response to entity ids.
+
+    Matches against canonical_name (case-insensitive) or any row in ``aliases``.
+    """
+    mentions = re.findall(r"\[\[(.+?)\]\]", full_text)
+    if not mentions:
         return []
 
-    citations = []
-    seen = set()
+    citations: list[dict] = []
+    seen: set[str] = set()
     async with db_factory() as session:
-        for title in pattern:
-            if title in seen:
+        for name in mentions:
+            key = name.lower().strip()
+            if key in seen:
                 continue
-            seen.add(title)
+            seen.add(key)
             result = await session.execute(
-                select(WikiPage.id, WikiPage.title)
-                .where(WikiPage.title.ilike(f"%{title}%"))
+                select(Entity.id, Entity.canonical_name, Entity.entity_type)
+                .where(
+                    or_(
+                        func.lower(Entity.canonical_name) == key,
+                        Entity.aliases.any(name),
+                    )
+                )
                 .limit(1)
             )
             row = result.first()
             if row:
-                citations.append({"page_id": str(row[0]), "title": row[1]})
-
+                citations.append(
+                    {
+                        "entity_id": str(row[0]),
+                        "name": row[1],
+                        "entity_type": row[2],
+                    }
+                )
     return citations
 
 
@@ -63,31 +78,36 @@ async def chat(
     embedder = request.app.state.embedder
     db_factory = request.app.state.db
 
-    # Search wiki for relevant context
     search_engine = SearchEngine(db=db_factory, embedder=embedder)
     results = await search_engine.search(body.message, limit=5)
 
-    # Fetch full page content for top results
-    context_pages = []
+    context_entities: list[dict] = []
     async with db_factory() as session:
         for r in results:
-            page = await session.get(WikiPage, r.page_id)
-            if page:
-                context_pages.append({
-                    "id": str(page.id),
-                    "title": page.title,
-                    "content": page.content[:3000],
-                })
+            entity = await session.get(Entity, r.entity_id)
+            if entity:
+                context_entities.append(
+                    {
+                        "id": str(entity.id),
+                        "name": entity.canonical_name,
+                        "type": entity.entity_type,
+                        "page_content": (entity.page_content or "")[:3000],
+                        "page_overview": entity.page_overview,
+                        "description": entity.description,
+                    }
+                )
 
-    system = f"""You are M3, a personal knowledge assistant. You answer questions using the user's personal wiki as your knowledge base.
+    context_block = _format_context(context_entities) if context_entities else "(No relevant entities found)"
 
-Available context from the wiki:
+    system = f"""You are M3, a personal knowledge assistant. You answer questions using the user's personal knowledge graph as your knowledge base.
 
-{_format_context(context_pages) if context_pages else "(No relevant wiki pages found)"}
+Available entities:
+
+{context_block}
 
 Rules:
-- Ground your answers in the wiki content above. Do not make things up.
-- Cite relevant wiki pages by wrapping the page title in double brackets: [[Page Title]]
+- Ground your answers in the entity content above. Do not make things up.
+- Cite entities by wrapping their exact canonical name in double brackets: [[Entity Name]].
 - If you don't have enough context to answer, say so honestly.
 - Be concise and direct. No fluff."""
 
@@ -101,7 +121,6 @@ Rules:
             full_response += chunk
             yield f"data: {json.dumps({'text': chunk})}\n\n"
 
-        # Resolve citations from the full response
         citations = await _resolve_citations(db_factory, full_response)
         if citations:
             yield f"data: {json.dumps({'citations': citations})}\n\n"

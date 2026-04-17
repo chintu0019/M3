@@ -20,9 +20,10 @@ M3's current wiki treats every uploaded item as a page source. `BasicEngine.comp
 | 4 | API + Insight Feed (graph-aware) | **DONE** | Phase 4 commits |
 | 5 | Wiki View Rebuild + Graph View | **DONE** | Phase 5 commit |
 | 6 | Backfill + Flip Default | **DONE** | Phase 6 commit |
-| 7 | Cleanup Legacy Code | NOT STARTED | -- |
+| 7 | Cleanup Legacy Code | **DONE** | Phase 7 commit |
 
-**Feature flag:** `settings.processing.wiki_mode` -- `"document"` (default), `"entity"`, `"both"` (shadow mode)
+Entity mode is the only pipeline. The `wiki_mode` flag, document-pipeline
+methods, legacy `/api/v1/wiki` endpoints, and the old wiki UI are gone.
 
 ## Design principle: capability-aware engines
 
@@ -237,14 +238,34 @@ default so new ingests stop double-writing.
 
 ---
 
-## Phase 7: Cleanup Legacy Code -- NOT STARTED
+## Phase 7: Cleanup Legacy Code -- DONE
 
-**What:** Remove document compile/synthesize after stable period.
+**What:** Removed the document pipeline now that entity mode is the only
+path. Chat ported to entity-based retrieval (hybrid semantic + FTS over
+`entities.embedding` + canonical_name / aliases / description / page_overview),
+citations switched from `[[Page Title]]` to `[[Entity Name]]` resolved
+against canonical_name and aliases.
 
-- [ ] Drop compile() and synthesize() from BasicEngine
-- [ ] Remove document-mode branch from process_item
-- [ ] Remove wiki_mode flag
-- [ ] Clean up legacy column / dead code
+- [x] Drop `classify() / compile() / synthesize()` from `BasicEngine` +
+      related dataclasses (Classification / PageUpdate / LinkUpdate /
+      CompileResult / SynthesisResult) from the engine ABC.
+- [x] Remove `_run_document_mode` and all doc helpers from `Compiler`
+      (`_write_page`, `_upsert_link`, `_update_wiki_index`,
+      `_find_related_pages`, `_get_wiki_*`, `_get_existing_*`).
+- [x] Remove the `wiki_mode` flag from `ProcessingSettings` and the
+      Compiler constructor; `process_item` runs one path now.
+- [x] Delete `compile_pass` / `deep_compile` ARQ tasks + crons; replace
+      the startup pass with a simpler `drain_pending_items` sweep.
+- [x] Delete `server/m3/api/wiki.py` and unregister its router.
+- [x] Port chat + `SearchEngine` to `entities` (hybrid vector + FTS).
+- [x] Delete `client/src/views/Wiki.tsx`, `/wiki` routes, the
+      `Wiki` NavLink, `api.wiki.*`, plus `WikiPagesList` and
+      `ClassificationCard` (replaced by a minimal `UserInputsCard`).
+- [x] Migration 005: drop `wiki_pages`, `wiki_links`, `wiki_schema`,
+      `changelog` tables and `entities.legacy_page_id` column.
+- [x] Delete obsolete `backfill_entities.py` script.
+- [x] Drop `WikiPageLinkedToItem` / linked_wiki_pages / legacy Wiki
+      schemas from `schemas/api.py` and the library detail flow.
 
 ---
 

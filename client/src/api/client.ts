@@ -36,32 +36,6 @@ export interface RawItem {
   processed_at: string | null;
 }
 
-export interface WikiPageSummary {
-  id: string;
-  title: string;
-  category: string | null;
-  page_type: string | null;
-  tags: string[];
-  confidence: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface WikiPage extends WikiPageSummary {
-  content: string;
-  source_items: string[];
-  metadata: Record<string, unknown>;
-  linked_pages: { id: string; title: string; link_type: string; direction: string }[];
-}
-
-export interface SearchResult {
-  page_id: string;
-  title: string;
-  snippet: string;
-  score: number;
-  category: string | null;
-}
-
 export interface ItemNote {
   id: string;
   item_id: string;
@@ -70,20 +44,9 @@ export interface ItemNote {
   updated_at: string;
 }
 
-export interface LinkedWikiPage {
-  id: string;
-  title: string;
-  category: string | null;
-  page_type: string | null;
-  tags: string[];
-  confidence: number;
-  updated_at: string;
-}
-
 export interface ItemDetail extends RawItem {
   file_url: string | null;
   notes: ItemNote[];
-  linked_wiki_pages: LinkedWikiPage[];
 }
 
 export interface CountItem {
@@ -228,23 +191,6 @@ export const api = {
     },
   },
 
-  wiki: {
-    pages: (params?: Record<string, string>) =>
-      request<Paginated<WikiPageSummary>>(
-        `/api/v1/wiki/pages${params ? "?" + new URLSearchParams(params) : ""}`,
-      ),
-    page: (id: string) => request<WikiPage>(`/api/v1/wiki/pages/${id}`),
-    search: (q: string) =>
-      request<SearchResult[]>(`/api/v1/wiki/search?q=${encodeURIComponent(q)}`),
-    projects: () => request<string[]>("/api/v1/wiki/projects"),
-    tags: () => request<{ tag: string; count: number }[]>("/api/v1/wiki/tags"),
-    graph: () =>
-      request<{
-        nodes: { id: string; title: string; category: string | null; connection_count: number }[];
-        edges: { source_id: string; target_id: string; link_type: string; weight: number }[];
-      }>("/api/v1/wiki/graph"),
-  },
-
   library: {
     get: (id: string) => request<ItemDetail>(`/api/v1/ingest/${id}`),
     patch: (id: string, data: { filename?: string; user_tags?: string[]; user_project?: string | null }) =>
@@ -355,7 +301,7 @@ export const api = {
       }),
   },
 
-  chat: async function* (message: string): AsyncGenerator<{ text?: string; citations?: { page_id: string; title: string }[] }> {
+  chat: async function* (message: string): AsyncGenerator<{ text?: string; citations?: { entity_id: string; name: string; entity_type: string }[] }> {
     const res = await fetch(`${BASE}/api/v1/chat`, {
       method: "POST",
       headers: {

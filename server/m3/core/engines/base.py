@@ -24,65 +24,12 @@ class ContentType(str, Enum):
 
 
 @dataclass
-class Classification:
-    summary: str
-    tags: list[str]
-    project: str | None
-    content_type: str
-    entities: list[dict]
-    confidence: float
-
-
-@dataclass
-class PageUpdate:
-    page_id: str | None  # None = create new
-    title: str
-    content: str
-    category: str | None
-    page_type: str
-    tags: list[str]
-    confidence: float
-
-
-@dataclass
-class LinkUpdate:
-    source_title: str
-    target_title: str
-    link_type: str  # references, contradicts, extends, related
-    weight: float = 1.0
-
-
-@dataclass
-class CompileResult:
-    pages: list[PageUpdate]
-    links: list[LinkUpdate]
-    schema_updates: str | None
-    changelog_entry: str
-
-
-@dataclass
 class Insight:
     type: str  # stale, contradiction, connection, orphan, suggestion, pattern, person
     title: str
     description: str
-    # Legacy document-mode field: wiki page titles. Entity-mode reuses
-    # related_entity_names instead. Left for backwards-compat.
-    related_pages: list[str] = field(default_factory=list)
-    # Entity-mode: canonical entity names this insight references.
     related_entity_names: list[str] = field(default_factory=list)
-    # Entity-mode: item ids the insight rests on (for citation).
     related_item_ids: list[str] = field(default_factory=list)
-
-
-@dataclass
-class SynthesisResult:
-    new_links: list[LinkUpdate]
-    insights: list[Insight]
-    schema_updates: str | None
-    changelog_entries: list[str]
-
-
-# --- Entity-centric wiki (Phase 2+) ---
 
 
 @dataclass
@@ -192,65 +139,18 @@ class CompilationEngine(ABC):
     # Engines override this to advertise what they support.
     capabilities: EngineCapabilities = EngineCapabilities()
 
-
     @abstractmethod
-    async def classify(
-        self,
-        content: str,
-        content_type: ContentType,
-        wiki_index: str,
-        wiki_schema: str,
-        existing_tags: list[str],
-        existing_projects: list[str],
-        user_tags: list[str] | None = None,
-        user_project: str | None = None,
-        user_notes: str | None = None,
-    ) -> Classification:
-        ...
-
-    @abstractmethod
-    async def compile(
-        self,
-        classified_item: Classification,
-        original_content: str,
-        related_pages: list[dict],
-        wiki_schema: str,
-        user_notes: str | None = None,
-    ) -> CompileResult:
-        ...
-
-    @abstractmethod
-    async def synthesize(
-        self,
-        wiki_index: str,
-        wiki_schema: str,
-        recent_changes: list[str],
-        all_page_summaries: list[dict],
-    ) -> SynthesisResult:
-        ...
-
     async def extract(
         self,
         content: str | list[ContentBlock],
         content_type: ContentType,
         user_notes: str | None = None,
     ) -> ExtractionResult:
-        """
-        Extract entities, atomic facts, and (optionally) semantic relationships
-        from a raw item. Used by the entity-centric wiki pipeline (Phase 2+).
-
-        `content` accepts either a plain string (legacy text-only path) or a
-        list of ContentBlocks. Engines whose capabilities declare `multimodal`
-        can consume ImageBlock / AudioBlock directly; others should receive
-        text already extracted upstream.
-
-        Deliberately NOT @abstractmethod: engines that don't support entity
-        extraction inherit this default and raise at call time only if the
-        compiler actually tries to use them in entity mode. The compiler
-        checks processing.wiki_mode before calling this, so document-mode
-        engines keep working unchanged.
-        """
-        raise NotImplementedError("This engine does not support entity extraction")
+        """Extract entities, atomic facts, and semantic relationships from a
+        raw item. `content` is either a plain string or a list of
+        ContentBlocks; engines whose capabilities declare `multimodal` can
+        consume ImageBlock / AudioBlock directly."""
+        ...
 
     async def render_entity(
         self,

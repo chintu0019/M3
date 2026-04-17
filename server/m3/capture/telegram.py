@@ -112,7 +112,7 @@ class TelegramCapture:
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from sqlalchemy import func, select
-        from m3.storage.models import WikiPage
+        from m3.storage.models import Entity
 
         async with self.db() as session:
             pending = (await session.execute(
@@ -121,14 +121,14 @@ class TelegramCapture:
             total_items = (await session.execute(
                 select(func.count(RawItem.id))
             )).scalar() or 0
-            total_pages = (await session.execute(
-                select(func.count(WikiPage.id)).where(WikiPage.page_type != "_index")
+            total_entities = (await session.execute(
+                select(func.count(Entity.id))
             )).scalar() or 0
 
         await update.message.reply_text(
             f"M3 Status:\n"
             f"  Items: {total_items} total, {pending} pending\n"
-            f"  Wiki pages: {total_pages}"
+            f"  Entities: {total_entities}"
         )
 
     async def cmd_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -148,7 +148,7 @@ class TelegramCapture:
 
         lines = []
         for r in results:
-            lines.append(f"*{r.title}*")
+            lines.append(f"*{r.canonical_name}* ({r.entity_type})")
             lines.append(f"{r.snippet[:200]}")
             lines.append("")
 
@@ -168,18 +168,21 @@ class TelegramCapture:
         context_parts = []
         async with self.db() as session:
             for r in results:
-                from m3.storage.models import WikiPage
-                page = await session.get(WikiPage, r.page_id)
-                if page:
-                    context_parts.append(f"### {page.title}\n{page.content[:2000]}")
+                from m3.storage.models import Entity
+                entity = await session.get(Entity, r.entity_id)
+                if entity:
+                    body = entity.page_content or entity.page_overview or entity.description or ""
+                    context_parts.append(
+                        f"### {entity.canonical_name} ({entity.entity_type})\n{body[:2000]}"
+                    )
 
-        wiki_context = "\n\n---\n\n".join(context_parts) if context_parts else "(No relevant pages)"
+        context_block = "\n\n---\n\n".join(context_parts) if context_parts else "(No relevant entities)"
 
-        system = f"""You are M3, a personal knowledge assistant. Answer based on the wiki context below.
+        system = f"""You are M3, a personal knowledge assistant. Answer based on the entity context below.
 Be concise -- this is a Telegram message.
 
-Wiki context:
-{wiki_context}"""
+Context:
+{context_block}"""
 
         response = await self.llm.complete(
             messages=[{"role": "user", "content": question}],
