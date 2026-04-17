@@ -197,7 +197,12 @@ function CanvasInner() {
         const nodeId = `entity:${a.id}`;
         const n = getNode(nodeId);
         if (n) {
-          setCenter(n.position.x, n.position.y, { zoom: 1.2, duration: 500 });
+          const w = n.measured?.width ?? 160;
+          const h = n.measured?.height ?? 80;
+          setCenter(n.position.x + w / 2, n.position.y + h / 2, {
+            zoom: 1.2,
+            duration: 500,
+          });
         }
       }
     },
