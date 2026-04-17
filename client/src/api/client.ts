@@ -196,17 +196,49 @@ export interface CanvasNodeData {
   insight_type?: string;
   description?: string;
   status?: string;
+  created_at?: string;
+  ended_at?: string | null;
 }
 
 export interface CanvasNode {
   id: string;
-  node_type: "entity" | "insight";
+  node_type: "entity" | "insight" | "thread";
   label: string;
   data: CanvasNodeData;
   x: number | null;
   y: number | null;
   width: number | null;
   height: number | null;
+}
+
+// --- Chat threads (Phase C) ---
+
+export interface ChatThreadSummary {
+  id: string;
+  title: string | null;
+  summary: string | null;
+  status: string;
+  created_at: string;
+  ended_at: string | null;
+  message_count: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChatThreadDetail extends ChatThreadSummary {
+  messages: ChatMessage[];
+  cited_entity_ids: string[];
+}
+
+export interface ChatCite {
+  entity_id: string;
+  name: string;
+  entity_type: string;
 }
 
 export interface CanvasEdge {
@@ -357,6 +389,22 @@ export const api = {
       }),
   },
 
+  threads: {
+    list: (params?: Record<string, string>) =>
+      request<Paginated<ChatThreadSummary>>(
+        `/api/v1/chat/threads${params ? "?" + new URLSearchParams(params) : ""}`,
+      ),
+    create: (title?: string) =>
+      request<ChatThreadSummary>(`/api/v1/chat/threads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title ?? null }),
+      }),
+    get: (id: string) => request<ChatThreadDetail>(`/api/v1/chat/threads/${id}`),
+    end: (id: string) =>
+      request<ChatThreadSummary>(`/api/v1/chat/threads/${id}/end`, { method: "POST" }),
+  },
+
   insights: {
     list: (params?: Record<string, string>) =>
       request<Paginated<InsightSummary>>(
@@ -415,14 +463,17 @@ export const api = {
       }),
   },
 
-  chat: async function* (message: string): AsyncGenerator<{ text?: string; citations?: { entity_id: string; name: string; entity_type: string }[] }> {
+  chat: async function* (
+    message: string,
+    thread_id?: string,
+  ): AsyncGenerator<{ text?: string; cite?: ChatCite }> {
     const res = await fetch(`${BASE}/api/v1/chat`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${getApiKey()}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, thread_id }),
     });
 
     if (!res.ok) throw new Error(`Chat error: ${res.status}`);
@@ -432,24 +483,34 @@ export const api = {
     const decoder = new TextDecoder();
     let buffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") return;
-          try {
-            yield JSON.parse(data);
-          } catch {
-            // skip malformed
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") return;
+            try {
+              yield JSON.parse(data);
+            } catch {
+              // skip malformed
+            }
           }
         }
+      }
+    } finally {
+      // Release the connection if the consumer breaks out early (component
+      // unmount, dock collapse mid-stream, thrown error downstream).
+      try {
+        await reader.cancel();
+      } catch {
+        // reader may already be closed
       }
     }
   },

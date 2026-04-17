@@ -38,10 +38,13 @@ async def get_canvas(
     entity_limit: int = Query(500, ge=1, le=2000),
     include_insights: bool = Query(True),
     insight_status: str = Query("new"),
+    include_threads: bool = Query(True),
+    thread_limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     _auth: str = Depends(verify_auth),
 ):
-    # Entities, ordered by facts_since_render desc as a rough salience proxy.
+    from m3.storage.models import ChatThread, ChatThreadPage  # local import to keep module header small
+
     entity_rows = (
         await db.execute(
             select(Entity)
@@ -51,17 +54,17 @@ async def get_canvas(
     ).scalars().all()
     entity_ids = {e.id for e in entity_rows}
 
-    # Edges inside the visible entity set.
-    edge_rows = (
-        await db.execute(
-            select(EntityLink).where(
-                EntityLink.source_entity_id.in_(entity_ids),
-                EntityLink.target_entity_id.in_(entity_ids),
+    edge_rows = []
+    if entity_ids:
+        edge_rows = (
+            await db.execute(
+                select(EntityLink).where(
+                    EntityLink.source_entity_id.in_(entity_ids),
+                    EntityLink.target_entity_id.in_(entity_ids),
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
 
-    # Optional insight nodes.
     insight_rows = []
     if include_insights:
         insight_rows = (
@@ -73,10 +76,33 @@ async def get_canvas(
             )
         ).scalars().all()
 
-    # Layout positions for anything we returned.
-    node_keys = [("entity", str(e.id)) for e in entity_rows] + [
-        ("insight", str(i.id)) for i in insight_rows
-    ]
+    thread_rows = []
+    thread_cite_rows = []
+    if include_threads:
+        thread_rows = (
+            await db.execute(
+                select(ChatThread)
+                .where(ChatThread.status.in_(["active", "ended"]))
+                .order_by(ChatThread.created_at.desc())
+                .limit(thread_limit)
+            )
+        ).scalars().all()
+        thread_ids = {t.id for t in thread_rows}
+        if thread_ids and entity_ids:
+            thread_cite_rows = (
+                await db.execute(
+                    select(ChatThreadPage).where(
+                        ChatThreadPage.thread_id.in_(thread_ids),
+                        ChatThreadPage.entity_id.in_(entity_ids),
+                    )
+                )
+            ).scalars().all()
+
+    node_keys = (
+        [("entity", str(e.id)) for e in entity_rows]
+        + [("insight", str(i.id)) for i in insight_rows]
+        + [("thread", str(t.id)) for t in thread_rows]
+    )
     layout_map: dict[tuple[str, str], CanvasLayout] = {}
     if node_keys:
         types = {k[0] for k in node_keys}
@@ -129,6 +155,21 @@ async def get_canvas(
                 x=x, y=y, width=w, height=h,
             )
         )
+    for t in thread_rows:
+        x, y, w, h = _pos("thread", str(t.id))
+        nodes.append(
+            CanvasNode(
+                id=f"thread:{t.id}",
+                node_type="thread",
+                label=t.title or "Untitled thread",
+                data={
+                    "status": t.status,
+                    "created_at": t.created_at.isoformat(),
+                    "ended_at": t.ended_at.isoformat() if t.ended_at else None,
+                },
+                x=x, y=y, width=w, height=h,
+            )
+        )
 
     edges = [
         CanvasEdge(
@@ -140,6 +181,16 @@ async def get_canvas(
         )
         for el in edge_rows
     ]
+    for ctp in thread_cite_rows:
+        edges.append(
+            CanvasEdge(
+                id=f"cite:{ctp.thread_id}:{ctp.entity_id}",
+                source=f"thread:{ctp.thread_id}",
+                target=_entity_node_id(ctp.entity_id),
+                edge_type="cited_by_thread",
+                weight=float(ctp.citation_count or 1),
+            )
+        )
 
     return CanvasResponse(nodes=nodes, edges=edges)
 

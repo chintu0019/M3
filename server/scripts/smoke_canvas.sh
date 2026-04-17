@@ -40,4 +40,20 @@ docker compose exec -T postgres psql -U m3 -d m3 -c \
   "DELETE FROM entities WHERE id = '$EID';" > /dev/null
 echo "  cleaned"
 
+echo
+echo "== Thread create/list/end =="
+KEY="${API_KEY:-dev-key}"
+TID=$(curl -fs -X POST "$HOST/api/v1/chat/threads" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Smoke thread"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['id'])")
+echo "  created $TID"
+curl -fs -H "Authorization: Bearer $KEY" "$HOST/api/v1/chat/threads" \
+  | python -c "import sys,json; print('  list total:', json.load(sys.stdin)['total'])"
+curl -fs -X POST -H "Authorization: Bearer $KEY" "$HOST/api/v1/chat/threads/$TID/end" \
+  | python -c "import sys,json; print('  ended status:', json.load(sys.stdin)['status'])"
+docker compose exec -T postgres psql -U m3 -d m3 -c \
+  "DELETE FROM chat_threads WHERE id = '$TID';" > /dev/null
+echo "  cleaned"
+
 echo "ok"

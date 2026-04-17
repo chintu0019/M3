@@ -5,7 +5,6 @@ import Library from "./views/Library";
 import LibraryDetail from "./views/LibraryDetail";
 import Entities from "./views/Entities";
 import Insights from "./views/Insights";
-import Chat from "./views/Chat";
 import Settings from "./views/Settings";
 import Canvas from "./views/Canvas";
 
@@ -31,9 +30,6 @@ function Nav({ activeModel }: { activeModel: string | null }) {
       </NavLink>
 <NavLink to="/insights" className={linkClass}>
         Insights
-      </NavLink>
-      <NavLink to="/chat" className={linkClass}>
-        Chat
       </NavLink>
       <div className="flex-1" />
       {activeModel && (
@@ -82,7 +78,6 @@ export default function App() {
           <Route path="/entities" element={<Entities />} />
           <Route path="/entities/:entityId" element={<Entities />} />
           <Route path="/insights" element={<Insights />} />
-          <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
