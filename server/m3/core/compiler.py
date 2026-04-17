@@ -106,6 +106,27 @@ class Compiler:
                 if item.content_text != content:
                     item.content_text = content
 
+                # Conversation items take a self-extraction shortcut and skip
+                # the entity-extraction pipeline entirely.
+                if (item.content_type or "").lower() == "conversation":
+                    from m3.core.self_extractor import extract_self_facts
+                    touched = await extract_self_facts(
+                        db_factory=self.db,
+                        llm=self.llm,
+                        transcript=content,
+                    )
+                    item.status = "done"
+                    item.processed_at = datetime.now(timezone.utc)
+                    if touched:
+                        item.error_message = f"Touched {len(touched)} self entities"
+                    await session.commit()
+                    logger.info(
+                        "Crystallized item %s: touched %d self entities",
+                        item_id,
+                        len(touched),
+                    )
+                    return
+
                 content_type = (
                     ContentType(item.content_type)
                     if item.content_type in ContentType.__members__.values()
