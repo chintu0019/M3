@@ -47,7 +47,7 @@ export default function Insights() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.entities.list({ per_page: "500" });
+        const res = await api.entities.list({ per_page: "200" });
         const by: Record<string, EntitySummary> = {};
         for (const e of res.items) by[e.id] = e;
         setEntitiesById(by);
