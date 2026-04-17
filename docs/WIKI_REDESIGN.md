@@ -15,8 +15,8 @@ M3's current wiki treats every uploaded item as a page source. `BasicEngine.comp
 | Phase | Description | Status | Branch/Commits |
 |-------|-------------|--------|----------------|
 | 1 | Schema + Models | **DONE** | `f414e33`..`0f2cded` |
-| 2 | Extract Pipeline + Entity Resolver (capability-aware) | **IN PROGRESS** | -- |
-| 3 | Entity Renderer + Type Consolidation | NOT STARTED | -- |
+| 2 | Extract Pipeline + Entity Resolver (capability-aware) | **DONE** | `4bbf96b`, `64e3fd5` |
+| 3 | Entity Renderer + Type Consolidation | **DONE** | `e86aa0e`..`fa5f513` |
 | 4 | API + Insight Feed (graph-aware) | NOT STARTED | -- |
 | 5 | Wiki View Rebuild | NOT STARTED | -- |
 | 6 | Backfill + Flip Default | NOT STARTED | -- |
@@ -115,24 +115,38 @@ path otherwise.
 
 ---
 
-## Phase 3: Entity Renderer + Type Consolidation -- NOT STARTED
+## Phase 3: Entity Renderer + Type Consolidation -- DONE
 
 **What:** Background worker regenerates dirty entity pages from facts, and a
 periodic `consolidate_types()` pass merges near-duplicate vocabulary entries.
+Plus a minimal read API so pages are reachable over HTTP.
 
-- [ ] **Task 1: Render engine method** -- `base.py` ABC + `basic.py` prompt
-  - Capable path: pass all facts in one call, Wikipedia-style synthesis with `[^item_id]` citations, no tiering
-  - Fallback path: tiered (overview of older facts + raw recent 30 + citations)
+**Detailed plan:** `docs/superpowers/plans/2026-04-17-wiki-redesign-phase-3-entity-renderer.md`
 
-- [ ] **Task 2: Renderer module** -- `server/m3/core/entity_renderer.py`
-  - Pick dirty entities ordered by facts_since_render DESC
-  - Validate: every `[^item_id]` must resolve to input fact's item_id
-  - Fallback to deterministic template if validation fails
-
-- [ ] **Task 3: Background cron** -- `server/m3/workers/tasks.py`
-  - `render_dirty_entities` every 5 min
-  - `consolidate_types` daily: review entity_types / fact_types / fact_roles, merge duplicates
-  - Clear page_dirty + reset facts_since_render after render
+- [x] **Task 1: Render engine method** -- `base.py` ABC + `basic.py`
+  - `RenderedPage` dataclass on ABC
+  - Capable path: single tool-use call (`RENDER_TOOL_SCHEMA`), all facts
+  - Fallback path: LLM summary of older facts + deterministic cited bullet list of recent 30
+- [x] **Task 2: Renderer module** -- `server/m3/core/entity_renderer.py`
+  - Picks dirty entities `ORDER BY facts_since_render DESC, updated_at ASC`
+  - Loads facts + bidirectional related entities
+  - Regex-validates `[^<item_id>]` citations; bogus ones trip a deterministic template fallback
+  - Per-entity commit for fault isolation
+- [x] **Task 3: `consolidate_types`** -- `basic.py` + `server/m3/core/type_consolidator.py`
+  - Capable path: tool-use call with `CONSOLIDATE_TOOL_SCHEMA`
+  - Applier writes `merged_into` on the dead row and rewrites base tables to the canonical name
+  - Local fallback is a deliberate no-op (local models do this badly)
+- [x] **Task 4: Background cron** -- `server/m3/workers/tasks.py`
+  - `render_dirty_entities_task` every 5 minutes
+  - `consolidate_types_task` daily at 04:00 UTC
+- [x] **Task 5: Minimal read endpoint** -- `server/m3/api/entities.py`
+  - `GET /api/v1/entities` (paginated, optional `entity_type` filter)
+  - `GET /api/v1/entities/{id}` (detail with `page_content`, `page_overview`, top 10 related)
+- [x] **Task 6: End-to-end smoke**
+  - Ingest -> render -> pages persisted with valid citations
+  - Re-ingest flips `page_dirty=true`; next render updates overview to latest fact
+  - Drift-seed + consolidate clean no-op against local model (capable-path merges
+    gated on a capable provider)
 
 ---
 
