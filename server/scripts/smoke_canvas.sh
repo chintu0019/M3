@@ -23,4 +23,21 @@ echo
 echo "== Cleanup =="
 docker compose exec -T postgres psql -U m3 -d m3 -c \
   "DELETE FROM canvas_layout WHERE node_id = 'smoke-test';" > /dev/null
+
+echo
+echo "== Entity create/patch/delete =="
+KEY="${API_KEY:-dev-key}"
+EID=$(curl -fs -X POST "$HOST/api/v1/entities" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"canonical_name":"Smoke Entity","entity_type":"project"}' \
+  | python -c "import sys, json; print(json.load(sys.stdin)['id'])")
+echo "  created $EID"
+curl -fs -X PATCH "$HOST/api/v1/entities/$EID" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"page_content":"# Smoke"}' > /dev/null
+echo "  patched"
+docker compose exec -T postgres psql -U m3 -d m3 -c \
+  "DELETE FROM entities WHERE id = '$EID';" > /dev/null
+echo "  cleaned"
+
 echo "ok"
