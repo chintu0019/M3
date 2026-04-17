@@ -18,7 +18,7 @@ M3's current wiki treats every uploaded item as a page source. `BasicEngine.comp
 | 2 | Extract Pipeline + Entity Resolver (capability-aware) | **DONE** | `4bbf96b`, `64e3fd5` |
 | 3 | Entity Renderer + Type Consolidation | **DONE** | `e86aa0e`..`fa5f513` |
 | 4 | API + Insight Feed (graph-aware) | **DONE** | Phase 4 commits |
-| 5 | Wiki View Rebuild | NOT STARTED | -- |
+| 5 | Wiki View Rebuild + Graph View | **DONE** | Phase 5 commit |
 | 6 | Backfill + Flip Default | NOT STARTED | -- |
 | 7 | Cleanup Legacy Code | NOT STARTED | -- |
 
@@ -185,20 +185,33 @@ insights referencing that entity.
 
 ---
 
-## Phase 5: Wiki View Rebuild -- NOT STARTED
+## Phase 5: Wiki View Rebuild + Graph View -- DONE
 
-**What:** Frontend switches from document-backed wiki to entity-backed view.
+**What:** Frontend switches from document-backed wiki to entity-backed
+views, adds a force-directed graph of the entity link structure, and a
+full insights feed. Legacy /wiki stays reachable during Phase 6.
 
-- [ ] **Task 1: Entity-backed Wiki.tsx**
-  - Sidebar: entity list grouped by type
-  - Main: entity page content with fact citations
-  - Right: related entities + insights for current entity
-
-- [ ] **Task 2: Insights.tsx** -- new page for full insight feed
-
-- [ ] **Task 3: API client** -- `api.entities.*`, `api.insights.*`
-
-- [ ] **Task 4: Routing** -- `/insights` route, re-point wiki to entity data
+- [x] **Task 1: Backend graph endpoint** -- `/api/v1/entities/graph`
+  (nodes with fact_count, edges with weight, optional type filter, node cap)
+- [x] **Task 2: Frontend API client** -- `api.entities.*`, `api.insights.*`,
+  TS types for EntitySummary/Detail, InsightSummary, EntityGraph
+- [x] **Task 3: Entities view** -- `client/src/views/Entities.tsx`
+  - Three-pane: sidebar (grouped by type + filter + search), main
+    (page_content markdown with [^<uuid>] -> clickable /library/:id),
+    right rail (related + open insights with ack/dismiss)
+- [x] **Task 4: Insights view** -- `client/src/views/Insights.tsx`
+  - Status tabs (new/acknowledged/dismissed/all), type filter,
+    per-card ack/dismiss/reopen, entity deep-links
+- [x] **Task 5: Interactive graph** -- `client/src/views/Graph.tsx`
+  - d3-force simulation, React-rendered SVG (positions updated via state
+    on every tick), drag, pan/zoom, click-to-navigate, type filter,
+    hover tooltip, radius scaled by fact_count
+- [x] **Task 6: Nav + routing** -- App.tsx: `/entities`, `/entities/:id`,
+  `/graph`, `/insights`. `/wiki` kept reachable during Phase 6 transition.
+- [x] **Task 7: Browser smoke** -- seeded 3 entities + 1 insight, verified
+  via playwright: entities list, detail with citations, graph with nodes
+  and edges, insights feed PATCH flow (new → acknowledged → visible
+  across views).
 
 ---
 

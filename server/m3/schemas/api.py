@@ -232,6 +232,28 @@ class EntityDetail(BaseModel):
     insights: list["InsightSummary"] = []
 
 
+# --- Entity graph (Phase 5) ---
+
+
+class EntityGraphNode(BaseModel):
+    id: uuid.UUID
+    canonical_name: str
+    entity_type: str
+    fact_count: int
+
+
+class EntityGraphEdge(BaseModel):
+    source_id: uuid.UUID
+    target_id: uuid.UUID
+    link_type: str
+    weight: int
+
+
+class EntityGraphResponse(BaseModel):
+    nodes: list[EntityGraphNode]
+    edges: list[EntityGraphEdge]
+
+
 # --- Insights (Phase 4) ---
 
 

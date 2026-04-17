@@ -34,3 +34,8 @@ minio_data/
 # Private local notes
 CLAUDE.md
 AGENTS.md
+
+# Smoke test screenshots + playwright
+.playwright-mcp/
+*.png
+client/tsconfig.tsbuildinfo

@@ -136,6 +136,66 @@ export interface LLMSettings {
   providers: ProviderInfo[];
 }
 
+// --- Entities (Phase 5) ---
+
+export interface EntitySummary {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  aliases: string[];
+  updated_at: string;
+  has_page: boolean;
+  facts_since_render: number;
+}
+
+export interface RelatedEntity {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  link_type: string;
+  weight: number;
+}
+
+export interface InsightSummary {
+  id: string;
+  insight_type: string;
+  title: string;
+  description: string;
+  related_entity_ids: string[];
+  related_item_ids: string[];
+  status: string;
+  created_at: string;
+}
+
+export interface EntityDetail extends EntitySummary {
+  description: string | null;
+  page_content: string | null;
+  page_overview: string | null;
+  page_dirty: boolean;
+  created_at: string;
+  related: RelatedEntity[];
+  insights: InsightSummary[];
+}
+
+export interface EntityGraphNode {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  fact_count: number;
+}
+
+export interface EntityGraphEdge {
+  source_id: string;
+  target_id: string;
+  link_type: string;
+  weight: number;
+}
+
+export interface EntityGraph {
+  nodes: EntityGraphNode[];
+  edges: EntityGraphEdge[];
+}
+
 // --- API ---
 
 export const api = {
@@ -236,6 +296,31 @@ export const api = {
         body: JSON.stringify({ ids }),
       }),
     stats: () => request<LibraryStats>(`/api/v1/ingest/library/stats`),
+  },
+
+  entities: {
+    list: (params?: Record<string, string>) =>
+      request<Paginated<EntitySummary>>(
+        `/api/v1/entities${params ? "?" + new URLSearchParams(params) : ""}`,
+      ),
+    get: (id: string) => request<EntityDetail>(`/api/v1/entities/${id}`),
+    graph: (params?: Record<string, string>) =>
+      request<EntityGraph>(
+        `/api/v1/entities/graph${params ? "?" + new URLSearchParams(params) : ""}`,
+      ),
+  },
+
+  insights: {
+    list: (params?: Record<string, string>) =>
+      request<Paginated<InsightSummary>>(
+        `/api/v1/insights${params ? "?" + new URLSearchParams(params) : ""}`,
+      ),
+    patch: (id: string, status: string) =>
+      request<InsightSummary>(`/api/v1/insights/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      }),
   },
 
   settings: {

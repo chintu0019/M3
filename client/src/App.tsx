@@ -4,6 +4,9 @@ import { api } from "./api/client";
 import Library from "./views/Library";
 import LibraryDetail from "./views/LibraryDetail";
 import Wiki from "./views/Wiki";
+import Entities from "./views/Entities";
+import Graph from "./views/Graph";
+import Insights from "./views/Insights";
 import Chat from "./views/Chat";
 import Settings from "./views/Settings";
 
@@ -20,6 +23,15 @@ function Nav({ activeModel }: { activeModel: string | null }) {
       <span className="font-bold text-lg mr-6">M3</span>
       <NavLink to="/library" className={linkClass}>
         Library
+      </NavLink>
+      <NavLink to="/entities" className={linkClass}>
+        Entities
+      </NavLink>
+      <NavLink to="/graph" className={linkClass}>
+        Graph
+      </NavLink>
+      <NavLink to="/insights" className={linkClass}>
+        Insights
       </NavLink>
       <NavLink to="/wiki" className={linkClass}>
         Wiki
@@ -70,6 +82,10 @@ export default function App() {
           <Route path="/" element={<Navigate to="/library" replace />} />
           <Route path="/library" element={<Library />} />
           <Route path="/library/:id" element={<LibraryDetail />} />
+          <Route path="/entities" element={<Entities />} />
+          <Route path="/entities/:entityId" element={<Entities />} />
+          <Route path="/graph" element={<Graph />} />
+          <Route path="/insights" element={<Insights />} />
           <Route path="/wiki" element={<Wiki />} />
           <Route path="/wiki/:pageId" element={<Wiki />} />
           <Route path="/chat" element={<Chat />} />
