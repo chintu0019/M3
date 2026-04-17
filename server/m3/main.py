@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from m3.api.canvas import router as canvas_router
 from m3.api.chat import router as chat_router
 from m3.api.entities import router as entities_router
 from m3.api.ingest import router as ingest_router
@@ -151,6 +152,7 @@ app.include_router(settings_router)
 app.include_router(library_router)
 app.include_router(entities_router)
 app.include_router(insights_router)
+app.include_router(canvas_router)
 
 
 @app.get("/api/v1/status")
