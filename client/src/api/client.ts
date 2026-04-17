@@ -159,6 +159,52 @@ export interface EntityGraph {
   edges: EntityGraphEdge[];
 }
 
+// --- Canvas ---
+
+export interface CanvasNodeData {
+  entity_type?: string;
+  has_page?: boolean;
+  overview?: string | null;
+  facts_since_render?: number;
+  insight_type?: string;
+  description?: string;
+  status?: string;
+}
+
+export interface CanvasNode {
+  id: string;
+  node_type: "entity" | "insight";
+  label: string;
+  data: CanvasNodeData;
+  x: number | null;
+  y: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface CanvasEdge {
+  id: string;
+  source: string;
+  target: string;
+  edge_type: string;
+  weight: number;
+}
+
+export interface CanvasResponse {
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+}
+
+export interface CanvasLayoutUpdate {
+  node_type: string;
+  node_id: string;
+  x: number;
+  y: number;
+  width?: number | null;
+  height?: number | null;
+  z_index?: number;
+}
+
 // --- API ---
 
 export const api = {
@@ -266,6 +312,19 @@ export const api = {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
+      }),
+  },
+
+  canvas: {
+    get: (params?: Record<string, string>) =>
+      request<CanvasResponse>(
+        `/api/v1/canvas${params ? "?" + new URLSearchParams(params) : ""}`,
+      ),
+    patchLayout: (updates: CanvasLayoutUpdate[]) =>
+      request<{ written: number }>(`/api/v1/canvas/layout`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates }),
       }),
   },
 
