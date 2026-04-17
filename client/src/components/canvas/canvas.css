@@ -1,0 +1,96 @@
+/* Default theme: Document (brutalist editorial).
+   Phase E will expand this into theme variable sets. */
+
+:root {
+  --canvas-bg: #fafaf7;
+  --canvas-ink: #0f0f0f;
+  --canvas-accent: #b91c1c;
+  --canvas-muted: #4a4a4a;
+  --canvas-rule: #0f0f0f;
+  --canvas-paper: #ffffff;
+  --canvas-serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --canvas-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html[data-theme="document"],
+html:not([data-theme]) {
+  background: var(--canvas-bg);
+  color: var(--canvas-ink);
+}
+
+.canvas-surface {
+  width: 100%;
+  height: calc(100vh - 57px); /* 57px = existing top nav height */
+  background: var(--canvas-bg);
+}
+
+/* React Flow overrides. */
+.react-flow__renderer,
+.react-flow__pane {
+  background: var(--canvas-bg);
+}
+
+.react-flow__edge-path {
+  stroke: var(--canvas-ink);
+  stroke-width: 1px;
+}
+
+.react-flow__controls {
+  background: var(--canvas-paper);
+  border: 1px solid var(--canvas-rule);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.react-flow__minimap {
+  background: var(--canvas-paper);
+  border: 1px solid var(--canvas-rule);
+}
+
+/* Nodes. */
+.canvas-node {
+  background: var(--canvas-paper);
+  border: 1px solid var(--canvas-rule);
+  color: var(--canvas-ink);
+  padding: 10px 14px;
+  font-family: var(--canvas-serif);
+  line-height: 1.25;
+  min-width: 140px;
+  max-width: 320px;
+}
+
+.canvas-node--chip {
+  padding: 4px 10px;
+  font-family: var(--canvas-mono);
+  font-size: 12px;
+  min-width: 0;
+  background: var(--canvas-bg);
+}
+
+.canvas-node--insight {
+  border-left: 3px solid var(--canvas-accent);
+}
+
+.canvas-node__title {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.canvas-node__meta {
+  font-family: var(--canvas-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--canvas-muted);
+  margin-top: 4px;
+}
+
+.canvas-node__overview {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--canvas-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
