@@ -82,5 +82,15 @@ export function useCanvasData() {
     [flushLayout],
   );
 
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+        void flushLayout();
+      }
+    };
+  }, [flushLayout]);
+
   return { nodes, edges, loading, error, reload: load, queueLayout, setNodes, setEdges };
 }
