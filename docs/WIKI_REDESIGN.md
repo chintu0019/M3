@@ -19,7 +19,7 @@ M3's current wiki treats every uploaded item as a page source. `BasicEngine.comp
 | 3 | Entity Renderer + Type Consolidation | **DONE** | `e86aa0e`..`fa5f513` |
 | 4 | API + Insight Feed (graph-aware) | **DONE** | Phase 4 commits |
 | 5 | Wiki View Rebuild + Graph View | **DONE** | Phase 5 commit |
-| 6 | Backfill + Flip Default | NOT STARTED | -- |
+| 6 | Backfill + Flip Default | **DONE** | Phase 6 commit |
 | 7 | Cleanup Legacy Code | NOT STARTED | -- |
 
 **Feature flag:** `settings.processing.wiki_mode` -- `"document"` (default), `"entity"`, `"both"` (shadow mode)
@@ -215,15 +215,25 @@ full insights feed. Legacy /wiki stays reachable during Phase 6.
 
 ---
 
-## Phase 6: Backfill + Flip Default -- NOT STARTED
+## Phase 6: Backfill + Flip Default -- DONE
 
-**What:** Re-process existing items, flip default to entity mode.
+**What:** Re-processed existing items through the entity pipeline and flipped the
+default so new ingests stop double-writing.
 
-- [ ] Backfill script: re-run extract() over all existing raw_items
-- [ ] Dry-run mode: report "would create N entities, M facts" first
-- [ ] Flag old wiki_pages as legacy=true
-- [ ] Flip wiki_mode default to "entity"
-- [ ] User confirmation before deleting legacy pages
+**Detailed plan:** `docs/superpowers/plans/2026-04-17-wiki-redesign-phase-6-backfill.md`
+
+- [x] **Backfill script** -- `server/m3/scripts/backfill_entities.py`
+  - `--dry-run` reports what would happen
+  - Idempotent (skips items that already have `entity_facts`)
+  - Per-item commit, `--delay` pacing, `--limit` cap
+  - `--mark-legacy-only` runs just the wiki_pages sweep
+- [x] **Legacy flag sweep** -- `UPDATE wiki_pages SET legacy=true WHERE page_type != '_index'`
+- [x] **Flip default** -- `ProcessingSettings.wiki_mode: "document"` → `"entity"`
+- [x] **End-to-end smoke**
+  - 14 pre-existing items backfilled: 66 entities, 120 facts, 18 edges
+  - Re-run reports "0 items to process, 14 already skipped"
+  - Legacy sweep flags 42 wiki_pages
+  - Fresh ingest under new default produces entities only (0 legacy pages)
 
 ---
 

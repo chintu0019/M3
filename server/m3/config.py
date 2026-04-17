@@ -69,7 +69,10 @@ class ProcessingSettings(BaseModel):
     engine_path: str | None = None
     auto_compile: bool = True
     compile_interval_minutes: int = 60
-    wiki_mode: str = "document"  # "document" (current) or "entity" (Phase 2+)
+    # Phase 6 flipped this from "document" to "entity". Users who want the
+    # legacy document pipeline can set wiki_mode="document" in user_settings
+    # or the M3_PROCESSING__WIKI_MODE env var; "both" still shadows both paths.
+    wiki_mode: str = "entity"
 
 
 class TelegramSettings(BaseModel):
