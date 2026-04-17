@@ -7,7 +7,7 @@ function nodeKind(id: string): { node_type: string; node_id: string } {
   return { node_type: id.slice(0, idx), node_id: id.slice(idx + 1) };
 }
 
-function toFlowNode(n: CanvasNode, fallbackIndex: number): Node {
+export function toFlowNode(n: CanvasNode, fallbackIndex: number): Node {
   // Fan nodes without saved positions out in a rough grid.
   const cols = 10;
   const spacing = 220;
@@ -22,7 +22,7 @@ function toFlowNode(n: CanvasNode, fallbackIndex: number): Node {
   };
 }
 
-function toFlowEdge(e: CanvasEdge): Edge {
+export function toFlowEdge(e: CanvasEdge): Edge {
   return {
     id: e.id,
     source: e.source,
@@ -92,5 +92,41 @@ export function useCanvasData() {
     };
   }, [flushLayout]);
 
-  return { nodes, edges, loading, error, reload: load, queueLayout, setNodes, setEdges };
+  const upsertNode = useCallback((next: Node) => {
+    setNodes((prev) => {
+      const idx = prev.findIndex((n) => n.id === next.id);
+      if (idx === -1) return [...prev, next];
+      const out = prev.slice();
+      out[idx] = next;
+      return out;
+    });
+  }, []);
+
+  const removeNode = useCallback((id: string) => {
+    setNodes((prev) => prev.filter((n) => n.id !== id));
+    setEdges((prev) => prev.filter((e) => e.source !== id && e.target !== id));
+  }, []);
+
+  const addEdge = useCallback((edge: Edge) => {
+    setEdges((prev) => [...prev, edge]);
+  }, []);
+
+  const removeEdge = useCallback((id: string) => {
+    setEdges((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+
+  return {
+    nodes,
+    edges,
+    loading,
+    error,
+    reload: load,
+    queueLayout,
+    setNodes,
+    setEdges,
+    upsertNode,
+    removeNode,
+    addEdge,
+    removeEdge,
+  };
 }
