@@ -9,16 +9,19 @@ psql the database.
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from m3.api.deps import get_db, verify_auth
 from m3.schemas.api import (
+    EntityCreateRequest,
     EntityDetail,
     EntityGraphEdge,
     EntityGraphNode,
     EntityGraphResponse,
+    EntityPatchRequest,
     EntitySummary,
     InsightSummary,
     PaginatedResponse,
@@ -198,3 +201,72 @@ async def get_entity(
         related=related,
         insights=insights,
     )
+
+
+@router.post("", response_model=EntityDetail, status_code=status.HTTP_201_CREATED)
+async def create_entity(
+    body: EntityCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    ent = Entity(
+        canonical_name=body.canonical_name.strip(),
+        entity_type=body.entity_type.strip().lower(),
+        description=body.description,
+    )
+    db.add(ent)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Entity with this canonical_name + entity_type already exists",
+        )
+    await db.refresh(ent)
+    return EntityDetail(
+        id=ent.id,
+        canonical_name=ent.canonical_name,
+        entity_type=ent.entity_type,
+        aliases=list(ent.aliases or []),
+        description=ent.description,
+        page_content=ent.page_content,
+        page_overview=ent.page_overview,
+        page_dirty=ent.page_dirty,
+        facts_since_render=ent.facts_since_render or 0,
+        created_at=ent.created_at,
+        updated_at=ent.updated_at,
+        related=[],
+        insights=[],
+    )
+
+
+@router.patch("/{entity_id}", response_model=EntityDetail)
+async def patch_entity(
+    entity_id: uuid.UUID,
+    body: EntityPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    ent = await db.get(Entity, entity_id)
+    if ent is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    if body.canonical_name is not None:
+        ent.canonical_name = body.canonical_name.strip()
+    if body.description is not None:
+        ent.description = body.description
+    if body.page_content is not None:
+        ent.page_content = body.page_content
+        ent.page_dirty = False  # user-authored edit is the new source of truth
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Another entity with this canonical_name + entity_type exists",
+        )
+    await db.refresh(ent)
+    # Return the same shape as GET — reuse get_entity so related/insights stay in sync.
+    return await get_entity(entity_id=ent.id, db=db, _auth="")
