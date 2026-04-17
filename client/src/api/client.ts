@@ -159,6 +159,33 @@ export interface EntityGraph {
   edges: EntityGraphEdge[];
 }
 
+export interface EntityCreateBody {
+  canonical_name: string;
+  entity_type: string;
+  description?: string | null;
+}
+
+export interface EntityPatchBody {
+  canonical_name?: string;
+  page_content?: string | null;
+  description?: string | null;
+}
+
+export interface EntityLinkCreateBody {
+  source_entity_id: string;
+  target_entity_id: string;
+  link_type?: string;
+  weight?: number;
+}
+
+export interface EntityLinkResponse {
+  id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  link_type: string;
+  weight: number;
+}
+
 // --- Canvas ---
 
 export interface CanvasNodeData {
@@ -300,6 +327,34 @@ export const api = {
       request<EntityGraph>(
         `/api/v1/entities/graph${params ? "?" + new URLSearchParams(params) : ""}`,
       ),
+    create: (body: EntityCreateBody) =>
+      request<EntityDetail>(`/api/v1/entities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    patch: (id: string, body: EntityPatchBody) =>
+      request<EntityDetail>(`/api/v1/entities/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+  },
+
+  entityLinks: {
+    create: (body: EntityLinkCreateBody) =>
+      request<EntityLinkResponse>(`/api/v1/entity-links`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetch(`${BASE}/api/v1/entity-links/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${localStorage.getItem("m3_api_key") || ""}` },
+      }).then((r) => {
+        if (!r.ok) throw new Error(`Delete link failed: ${r.status}`);
+      }),
   },
 
   insights: {
