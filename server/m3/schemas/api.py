@@ -239,3 +239,33 @@ class CanvasLayoutBulkRequest(BaseModel):
 
 class CanvasLayoutBulkResponse(BaseModel):
     written: int
+
+
+# --- Entity write operations (Phase B) ---
+
+
+class EntityCreateRequest(BaseModel):
+    canonical_name: str = Field(..., min_length=1, max_length=500)
+    entity_type: str = Field(..., min_length=1, max_length=50)
+    description: str | None = None
+
+
+class EntityPatchRequest(BaseModel):
+    canonical_name: str | None = Field(None, min_length=1, max_length=500)
+    page_content: str | None = None  # pass "" to clear, None to leave unchanged
+    description: str | None = None
+
+
+class EntityLinkCreateRequest(BaseModel):
+    source_entity_id: uuid.UUID
+    target_entity_id: uuid.UUID
+    link_type: str = Field("related", min_length=1, max_length=50)
+    weight: int = Field(1, ge=1, le=10)
+
+
+class EntityLinkResponse(BaseModel):
+    id: uuid.UUID
+    source_entity_id: uuid.UUID
+    target_entity_id: uuid.UUID
+    link_type: str
+    weight: int
