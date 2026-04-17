@@ -309,3 +309,7 @@ class ThreadCrystallizeResponse(BaseModel):
     thread_id: uuid.UUID
     raw_item_id: uuid.UUID
     enqueued: bool
+
+
+class SelfContextSettings(BaseModel):
+    enabled: bool

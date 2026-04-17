@@ -133,7 +133,26 @@ async def chat(
         _format_context(context_entities) if context_entities else "(No relevant entities found)"
     )
 
-    system = f"""You are M3, a personal knowledge assistant. You answer questions using the user's personal knowledge graph as your knowledge base.
+    user_store = getattr(request.app.state, "user_store", None)
+    self_block = ""
+    if user_store and user_store.get_self_context_enabled():
+        async with db_factory() as session:
+            self_rows = (
+                await session.execute(
+                    select(Entity)
+                    .where(Entity.entity_type == "self")
+                    .order_by(Entity.canonical_name.asc())
+                )
+            ).scalars().all()
+        parts = []
+        for e in self_rows:
+            body_text = (e.page_content or "").strip()
+            if body_text:
+                parts.append(f"### {e.canonical_name}\n{body_text}")
+        if parts:
+            self_block = "\n\n## What we know about the user\n\n" + "\n\n".join(parts) + "\n"
+
+    system = f"""You are M3, a personal knowledge assistant. You answer questions using the user's personal knowledge graph as your knowledge base.{self_block}
 
 Available entities:
 
