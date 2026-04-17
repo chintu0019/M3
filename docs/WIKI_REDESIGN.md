@@ -17,7 +17,7 @@ M3's current wiki treats every uploaded item as a page source. `BasicEngine.comp
 | 1 | Schema + Models | **DONE** | `f414e33`..`0f2cded` |
 | 2 | Extract Pipeline + Entity Resolver (capability-aware) | **DONE** | `4bbf96b`, `64e3fd5` |
 | 3 | Entity Renderer + Type Consolidation | **DONE** | `e86aa0e`..`fa5f513` |
-| 4 | API + Insight Feed (graph-aware) | NOT STARTED | -- |
+| 4 | API + Insight Feed (graph-aware) | **DONE** | Phase 4 commits |
 | 5 | Wiki View Rebuild | NOT STARTED | -- |
 | 6 | Backfill + Flip Default | NOT STARTED | -- |
 | 7 | Cleanup Legacy Code | NOT STARTED | -- |
@@ -150,25 +150,38 @@ Plus a minimal read API so pages are reachable over HTTP.
 
 ---
 
-## Phase 4: API + Insight Feed -- NOT STARTED
+## Phase 4: API + Insight Feed -- DONE
 
-**What:** Entity + insight endpoints. Insight pass runs after every ingest.
+**What:** Insight pass after every entity-mode ingest, scoped to the 2-hop
+neighbourhood of touched entities; endpoints for entities (list/detail) and
+insights (list/filter/PATCH status); entity detail grows to carry open
+insights referencing that entity.
 
-- [ ] **Task 1: Entity API** -- `server/m3/api/entities.py`
-  - GET /entities (list, filterable by type)
-  - GET /entities/:id (detail with facts, related entities)
+**Detailed plan:** `docs/superpowers/plans/2026-04-17-wiki-redesign-phase-4-insights.md`
 
-- [ ] **Task 2: Insight API** -- `server/m3/api/insights.py`
-  - GET /insights (feed with status filter)
-  - PATCH /insights/:id (acknowledge/dismiss)
-
-- [ ] **Task 3: Insight engine** -- `base.py` + `basic.py`
-  - find_insights() runs after every process_item, scoped to 2-hop neighbourhood of touched entities
-  - Capable path: one tool-use call per ingest, emits the seven insight categories; no per-item cap
-  - Dedup by (insight_type, related_entity_ids) so re-ingests don't spam
-  - Weekly deep pass for graph-wide patterns
-
-- [ ] **Task 4: Wire routers** -- `server/m3/main.py` + `server/m3/schemas/api.py`
+- [x] **Task 1: `BasicEngine.find_insights`** -- `basic.py`
+  - Capable path: one tool-use call (`INSIGHTS_TOOL_SCHEMA`) covering all seven categories
+  - Fallback path: deliberate no-op (local models hallucinate patterns)
+  - Grew `Insight` dataclass with `related_entity_names` + `related_item_ids`
+- [x] **Task 2: Insight engine orchestrator** -- `server/m3/core/insight_engine.py`
+  - 2-hop neighbourhood walk via `entity_links`
+  - Recent-facts loader (cap 20 per entity)
+  - Name -> id resolution preferring the touched/neighbourhood set
+  - Dedup against existing `(insight_type, sorted(related_entity_ids))` in new/acknowledged status
+- [x] **Task 3: Compiler hook** -- `server/m3/core/compiler.py`
+  - `_persist_extraction` now returns `(facts, touched_entity_ids)`
+  - `_run_entity_mode` calls `find_for_touched` after persist; errors logged, never raise
+  - Bonus: dedup entity refs per fact on resolved entity id (LLM sometimes
+    emits the same entity twice with different roles; PK violation fixed)
+- [x] **Task 4: `/api/v1/insights`** -- `server/m3/api/insights.py` + `schemas/api.py`
+  - GET list (status + insight_type filters, pagination)
+  - PATCH status (new | acknowledged | dismissed)
+- [x] **Task 5: Entity detail includes open insights** -- `api/entities.py`
+- [x] **Task 6: End-to-end smoke**
+  - API CRUD against seeded rows (list/filter/PATCH/400 on bad status)
+  - Ingest in wiki_mode=both against ollama: entity mode succeeds, worker
+    logs `find_insights skipped`, zero insight rows (capable-path rows
+    gated on a real provider key)
 
 ---
 

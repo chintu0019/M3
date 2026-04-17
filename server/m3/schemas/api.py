@@ -229,3 +229,22 @@ class EntityDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     related: list[RelatedEntity] = []
+    insights: list["InsightSummary"] = []
+
+
+# --- Insights (Phase 4) ---
+
+
+class InsightSummary(BaseModel):
+    id: uuid.UUID
+    insight_type: str
+    title: str
+    description: str
+    related_entity_ids: list[uuid.UUID] = []
+    related_item_ids: list[uuid.UUID] = []
+    status: str
+    created_at: datetime
+
+
+class InsightPatchRequest(BaseModel):
+    status: str  # new | acknowledged | dismissed

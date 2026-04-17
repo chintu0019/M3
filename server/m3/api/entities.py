@@ -17,10 +17,11 @@ from m3.api.deps import get_db, verify_auth
 from m3.schemas.api import (
     EntityDetail,
     EntitySummary,
+    InsightSummary,
     PaginatedResponse,
     RelatedEntity,
 )
-from m3.storage.models import Entity, EntityLink
+from m3.storage.models import Entity, EntityLink, Insight
 
 router = APIRouter(prefix="/api/v1/entities", tags=["entities"])
 
@@ -105,6 +106,29 @@ async def get_entity(
             )
     related = sorted(dedup.values(), key=lambda r: r.weight, reverse=True)[:10]
 
+    # Open insights referencing this entity (new or acknowledged; dismissed
+    # intentionally excluded from the entity page).
+    insights_stmt = (
+        select(Insight)
+        .where(Insight.status.in_(["new", "acknowledged"]))
+        .where(Insight.related_entity_ids.any(entity_id))
+        .order_by(Insight.created_at.desc())
+    )
+    insight_rows = (await db.execute(insights_stmt)).scalars().all()
+    insights = [
+        InsightSummary(
+            id=r.id,
+            insight_type=r.insight_type,
+            title=r.title,
+            description=r.description,
+            related_entity_ids=list(r.related_entity_ids or []),
+            related_item_ids=list(r.related_item_ids or []),
+            status=r.status,
+            created_at=r.created_at,
+        )
+        for r in insight_rows
+    ]
+
     return EntityDetail(
         id=ent.id,
         canonical_name=ent.canonical_name,
@@ -118,4 +142,5 @@ async def get_entity(
         created_at=ent.created_at,
         updated_at=ent.updated_at,
         related=related,
+        insights=insights,
     )

@@ -144,6 +144,64 @@ EXTRACT_TOOL_SCHEMA = {
 
 # --- Render tool schema (Task: Phase 3 / render_entity) ---
 
+INSIGHT_TYPES = [
+    "contradiction", "connection", "stale", "pattern",
+    "orphan", "suggestion", "person",
+]
+
+
+INSIGHTS_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "insights": {
+            "type": "array",
+            "description": (
+                "Zero or more insights scoped to the touched entities and "
+                "their 2-hop neighbourhood. Only emit insights that are "
+                "actually supported by the supplied facts. If nothing "
+                "interesting is happening, return an empty array."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "insight_type": {
+                        "type": "string",
+                        "description": (
+                            "One of: contradiction, connection, stale, "
+                            "pattern, orphan, suggestion, person."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "<=80 char one-line summary.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "Markdown body. Cite supporting facts with "
+                            "[^<item_id>] when the insight rests on specific "
+                            "facts. Never invent item_ids."
+                        ),
+                    },
+                    "related_entity_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Canonical names of related entities.",
+                    },
+                    "related_item_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Source item ids this insight rests on.",
+                    },
+                },
+                "required": ["insight_type", "title", "description"],
+            },
+        },
+    },
+    "required": ["insights"],
+}
+
+
 CONSOLIDATE_TOOL_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1023,6 +1081,113 @@ Return JSON:
             "fact_types": _clean("fact_type_merges"),
             "fact_roles": _clean("fact_role_merges"),
         }
+
+    # --- Insight detection ---
+
+    async def find_insights(
+        self,
+        touched_entities: list[dict],
+        neighborhood: list[dict],
+        recent_facts: list[dict],
+    ) -> list[Insight]:
+        """Emit typed insights scoped to the touched entities. Capable path
+        sends the neighbourhood in one tool-use call; fallback returns []."""
+        if not self.llm.supports_tools:
+            logger.info(
+                "find_insights skipped: active LLM does not support tools"
+            )
+            return []
+        if not touched_entities:
+            return []
+
+        def _entities_block(rows: list[dict]) -> str:
+            if not rows:
+                return "(none)"
+            return "\n".join(
+                f"- {r['canonical_name']} ({r['entity_type']})"
+                + (f" — {r['description']}" if r.get('description') else "")
+                for r in rows
+            )
+
+        def _facts_block(rows: list[dict]) -> str:
+            if not rows:
+                return "(none)"
+            return "\n".join(
+                f"- [{f['fact_type']}] {f['content']} (entity: {f.get('entity_name','?')}, item: {f['item_id']})"
+                for f in rows[:80]  # cap prompt size; newest-first means recency wins
+            )
+
+        system = (
+            "You surface insights in a personal knowledge base. Given the "
+            "entities touched by a recent ingest, their 2-hop neighbourhood, "
+            "and recent facts, emit zero or more typed insights. Types:\n"
+            "- contradiction: two facts directly disagree\n"
+            "- connection: same concept spans unrelated areas\n"
+            "- stale: an active topic has gone quiet\n"
+            "- pattern: recurring behaviour across facts\n"
+            "- orphan: an entity disconnected from everything else\n"
+            "- suggestion: an actionable next step grounded in facts\n"
+            "- person: a person-centred observation (e.g. someone appears "
+            "across N projects)\n\n"
+            "STRICT RULES:\n"
+            "- Only emit an insight when it's clearly supported. Prefer "
+            "returning an empty array over speculative ones.\n"
+            "- Cite supporting facts with [^<item_id>] in the description, "
+            "using only item_ids from the recent_facts list.\n"
+            "- Skip insights that are already obvious from the raw facts.\n"
+            "- Call find_insights exactly once."
+        )
+        user = (
+            f"Touched entities (this ingest):\n{_entities_block(touched_entities)}\n\n"
+            f"Neighbourhood (2-hop):\n{_entities_block(neighborhood)}\n\n"
+            f"Recent facts (newest first):\n{_facts_block(recent_facts)}"
+        )
+        tool = Tool(
+            name="find_insights",
+            description="Emit zero or more typed insights scoped to the touched entities.",
+            input_schema=INSIGHTS_TOOL_SCHEMA,
+        )
+        try:
+            result = await self.llm.complete_tool(
+                messages=[{"role": "user", "content": user}],
+                tools=[tool],
+                system=system,
+                tool_choice="find_insights",
+                max_tokens=2048,
+                temperature=0.3,
+            )
+        except Exception as e:
+            logger.warning(f"find_insights tool call failed: {e}")
+            return []
+
+        raw = (result.input or {}).get("insights") or []
+        out: list[Insight] = []
+        for entry in raw:
+            itype = (entry.get("insight_type") or "").strip().lower()
+            if itype not in INSIGHT_TYPES:
+                # Permit drift but normalise — the DB column is free-text and
+                # the UI filters by `status`, not by type.
+                itype = itype or "pattern"
+            title = (entry.get("title") or "").strip()
+            desc = (entry.get("description") or "").strip()
+            if not title or not desc:
+                continue
+            related_names = [
+                n.strip() for n in (entry.get("related_entity_names") or [])
+                if isinstance(n, str) and n.strip()
+            ]
+            related_items = [
+                s.strip() for s in (entry.get("related_item_ids") or [])
+                if isinstance(s, str) and s.strip()
+            ]
+            out.append(Insight(
+                type=itype,
+                title=title[:500],
+                description=desc,
+                related_entity_names=related_names,
+                related_item_ids=related_items,
+            ))
+        return out
 
 
 # --- module-level helper shared by the fallback extract path ---

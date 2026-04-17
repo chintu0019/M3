@@ -26,6 +26,7 @@ from m3.core.engines.base import (
     TextBlock,
 )
 from m3.core.entity_resolver import resolve as resolve_entity
+from m3.core.insight_engine import find_for_touched as find_insights_for_touched
 from m3.core.extractors import (
     extract_by_filename,
     extract_docx,
@@ -328,12 +329,26 @@ class Compiler:
         except NotImplementedError:
             logger.warning("Engine does not support extract(); skipping entity mode")
             return ""
-        n = await self._persist_extraction(session, item, extraction)
+        n, touched_ids = await self._persist_extraction(session, item, extraction)
         rel_count = len(extraction.relationships or [])
-        return (
+
+        # Insight pass — best-effort. Failure never blocks ingest.
+        insight_count = 0
+        if touched_ids:
+            try:
+                insight_count = await find_insights_for_touched(
+                    session, self.engine, touched_ids,
+                )
+            except Exception:
+                logger.exception("find_insights raised; ingest continues")
+
+        summary = (
             f"Extracted {len(extraction.entities)} entities, {n} facts, "
             f"{rel_count} relationships"
         )
+        if insight_count:
+            summary += f", {insight_count} insights"
+        return summary
 
     async def _build_content_blocks(
         self, item: RawItem, text_content: str,
@@ -372,11 +387,11 @@ class Compiler:
         session: AsyncSession,
         item: RawItem,
         extraction: ExtractionResult,
-    ) -> int:
-        """Write extracted entities, facts, fact-links, and entity_links for
-        one item. Returns the number of facts persisted."""
+    ) -> tuple[int, list[uuid.UUID]]:
+        """Write entities, facts, fact-links, and entity_links for one item.
+        Returns (facts_persisted, touched_entity_ids)."""
         if not extraction.entities and not extraction.facts:
-            return 0
+            return 0, []
 
         # 1) Resolve every mention up front so facts can reuse the cache.
         resolved: dict[tuple[str, str], Entity] = {}
@@ -406,7 +421,19 @@ class Compiler:
             await session.flush()
             await self._bump_type_vocab(session, FactTypeVocab, ef.fact_type)
 
-            linked_entity_ids: list[uuid.UUID] = []
+            # Two passes: (1) resolve every ref and pick the strongest
+            # role when the LLM emits the same entity twice in one fact;
+            # (2) emit one fact-link row per unique entity. The PK on
+            # entity_fact_links is (fact_id, entity_id), so duplicate
+            # (entity, fact) pairs with different roles would otherwise
+            # violate it.
+            role_rank = {
+                "subject": 3, "attributed_to": 2,
+                "location": 1, "time": 1, "mentioned": 0,
+            }
+            best_role: dict[uuid.UUID, str] = {}
+            ordered_ids: list[uuid.UUID] = []
+
             for ref in ef.entity_refs:
                 rname = (ref.get("name") or "").strip()
                 rtype = (ref.get("type") or "topic").strip().lower()
@@ -428,11 +455,23 @@ class Compiler:
                     resolved[key] = ent
                     await self._bump_type_vocab(session, EntityTypeVocab, ent.entity_type)
 
-                session.add(EntityFactLink(fact_id=fact.id, entity_id=ent.id, role=role))
+                prev = best_role.get(ent.id)
+                if prev is None:
+                    best_role[ent.id] = role
+                    ordered_ids.append(ent.id)
+                elif role_rank.get(role, 0) > role_rank.get(prev, 0):
+                    best_role[ent.id] = role
+
+            linked_entity_ids: list[uuid.UUID] = []
+            for eid in ordered_ids:
+                role = best_role[eid]
+                # Find the Entity row we already resolved so we can mark dirty.
+                ent = next(e for e in resolved.values() if e.id == eid)
+                session.add(EntityFactLink(fact_id=fact.id, entity_id=eid, role=role))
                 await self._bump_type_vocab(session, FactRoleVocab, role)
                 ent.page_dirty = True
                 ent.facts_since_render = (ent.facts_since_render or 0) + 1
-                linked_entity_ids.append(ent.id)
+                linked_entity_ids.append(eid)
 
             persisted_facts += 1
 
@@ -468,7 +507,8 @@ class Compiler:
             await self._upsert_entity_link(session, a, b, rel.link_type, rel.weight)
 
         await session.flush()
-        return persisted_facts
+        touched_ids = list({e.id for e in resolved.values()})
+        return persisted_facts, touched_ids
 
     async def _upsert_entity_link(
         self,

@@ -62,10 +62,16 @@ class CompileResult:
 
 @dataclass
 class Insight:
-    type: str  # stale, contradiction, connection, orphan, suggestion, pattern
+    type: str  # stale, contradiction, connection, orphan, suggestion, pattern, person
     title: str
     description: str
-    related_pages: list[str]
+    # Legacy document-mode field: wiki page titles. Entity-mode reuses
+    # related_entity_names instead. Left for backwards-compat.
+    related_pages: list[str] = field(default_factory=list)
+    # Entity-mode: canonical entity names this insight references.
+    related_entity_names: list[str] = field(default_factory=list)
+    # Entity-mode: item ids the insight rests on (for citation).
+    related_item_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
