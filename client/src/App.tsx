@@ -4,10 +4,10 @@ import { api } from "./api/client";
 import Library from "./views/Library";
 import LibraryDetail from "./views/LibraryDetail";
 import Entities from "./views/Entities";
-import Graph from "./views/Graph";
 import Insights from "./views/Insights";
 import Chat from "./views/Chat";
 import Settings from "./views/Settings";
+import Canvas from "./views/Canvas";
 
 function Nav({ activeModel }: { activeModel: string | null }) {
   const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -20,16 +20,16 @@ function Nav({ activeModel }: { activeModel: string | null }) {
   return (
     <nav className="flex items-center gap-2 px-6 py-3 border-b border-m3-border bg-m3-bg">
       <span className="font-bold text-lg mr-6">M3</span>
+      <NavLink to="/canvas" className={linkClass}>
+        Canvas
+      </NavLink>
       <NavLink to="/library" className={linkClass}>
         Library
       </NavLink>
       <NavLink to="/entities" className={linkClass}>
         Entities
       </NavLink>
-      <NavLink to="/graph" className={linkClass}>
-        Graph
-      </NavLink>
-      <NavLink to="/insights" className={linkClass}>
+<NavLink to="/insights" className={linkClass}>
         Insights
       </NavLink>
       <NavLink to="/chat" className={linkClass}>
@@ -75,12 +75,12 @@ export default function App() {
       <Nav activeModel={activeModel} />
       <main className="flex-1">
         <Routes>
-          <Route path="/" element={<Navigate to="/library" replace />} />
+          <Route path="/" element={<Navigate to="/canvas" replace />} />
+          <Route path="/canvas" element={<Canvas />} />
           <Route path="/library" element={<Library />} />
           <Route path="/library/:id" element={<LibraryDetail />} />
           <Route path="/entities" element={<Entities />} />
           <Route path="/entities/:entityId" element={<Entities />} />
-          <Route path="/graph" element={<Graph />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />

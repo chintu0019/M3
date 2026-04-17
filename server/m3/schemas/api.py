@@ -194,3 +194,78 @@ class InsightSummary(BaseModel):
 
 class InsightPatchRequest(BaseModel):
     status: str  # new | acknowledged | dismissed
+
+
+# --- Canvas ---
+
+
+class CanvasNode(BaseModel):
+    id: str  # "entity:<uuid>" or "insight:<uuid>"
+    node_type: str  # "entity" | "insight"
+    label: str
+    data: dict  # type-specific payload (entity_type, has_page, insight_type, etc.)
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+
+
+class CanvasEdge(BaseModel):
+    id: str  # "link:<uuid>"
+    source: str  # node id
+    target: str  # node id
+    edge_type: str  # "related", "references", etc.
+    weight: float = 1.0
+
+
+class CanvasResponse(BaseModel):
+    nodes: list[CanvasNode]
+    edges: list[CanvasEdge]
+
+
+class CanvasLayoutUpdate(BaseModel):
+    node_type: str
+    node_id: str
+    x: float
+    y: float
+    width: float | None = None
+    height: float | None = None
+    z_index: int = 0
+
+
+class CanvasLayoutBulkRequest(BaseModel):
+    updates: list[CanvasLayoutUpdate]
+
+
+class CanvasLayoutBulkResponse(BaseModel):
+    written: int
+
+
+# --- Entity write operations (Phase B) ---
+
+
+class EntityCreateRequest(BaseModel):
+    canonical_name: str = Field(..., min_length=1, max_length=500)
+    entity_type: str = Field(..., min_length=1, max_length=50)
+    description: str | None = None
+
+
+class EntityPatchRequest(BaseModel):
+    canonical_name: str | None = Field(None, min_length=1, max_length=500)
+    page_content: str | None = None  # pass "" to clear, None to leave unchanged
+    description: str | None = None
+
+
+class EntityLinkCreateRequest(BaseModel):
+    source_entity_id: uuid.UUID
+    target_entity_id: uuid.UUID
+    link_type: str = Field("related", min_length=1, max_length=50)
+    weight: int = Field(1, ge=1, le=10)
+
+
+class EntityLinkResponse(BaseModel):
+    id: uuid.UUID
+    source_entity_id: uuid.UUID
+    target_entity_id: uuid.UUID
+    link_type: str
+    weight: int

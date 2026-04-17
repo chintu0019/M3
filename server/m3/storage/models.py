@@ -224,3 +224,21 @@ class Insight(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class CanvasLayout(Base):
+    __tablename__ = "canvas_layout"
+
+    node_type: Mapped[str] = mapped_column(String(30), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
+    width: Mapped[float | None] = mapped_column(Float)
+    height: Mapped[float | None] = mapped_column(Float)
+    z_index: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
