@@ -56,4 +56,22 @@ docker compose exec -T postgres psql -U m3 -d m3 -c \
   "DELETE FROM chat_threads WHERE id = '$TID';" > /dev/null
 echo "  cleaned"
 
+echo
+echo "== Thread crystallize =="
+KEY="${API_KEY:-dev-key}"
+TID=$(curl -fs -X POST "$HOST/api/v1/chat/threads" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Crystallize smoke"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['id'])")
+docker compose exec -T postgres psql -U m3 -d m3 -c \
+  "INSERT INTO chat_messages (thread_id, role, content) VALUES ('$TID', 'user', 'I prefer dark mode.'), ('$TID', 'assistant', 'Noted.');" > /dev/null
+RAW=$(curl -fs -X POST "$HOST/api/v1/chat/threads/$TID/crystallize" \
+  -H "Authorization: Bearer $KEY" | python -c "import sys,json; print(json.load(sys.stdin)['raw_item_id'])")
+echo "  enqueued raw_item $RAW"
+docker compose exec -T postgres psql -U m3 -d m3 -c \
+  "DELETE FROM chat_threads WHERE id = '$TID';" > /dev/null
+docker compose exec -T postgres psql -U m3 -d m3 -c \
+  "DELETE FROM raw_items WHERE id = '$RAW';" > /dev/null
+echo "  cleaned"
+
 echo "ok"
