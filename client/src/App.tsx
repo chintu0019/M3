@@ -67,9 +67,9 @@ export default function App() {
   }, [loadActiveModel]);
 
   return (
-    <div className="min-h-screen bg-m3-bg text-m3-text flex flex-col">
+    <div className="h-screen overflow-hidden bg-m3-bg text-m3-text flex flex-col">
       <Nav activeModel={activeModel} />
-      <main className="flex-1">
+      <main className="flex-1 min-h-0">
         <Routes>
           <Route path="/" element={<Navigate to="/canvas" replace />} />
           <Route path="/canvas" element={<Canvas />} />
