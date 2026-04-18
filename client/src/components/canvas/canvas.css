@@ -1,7 +1,7 @@
-/* Default theme: Document (brutalist editorial).
-   Phase E will expand this into theme variable sets. */
+/* ---- Theme: Document (default) ---- */
 
-:root {
+:root,
+html[data-theme="document"] {
   --canvas-bg: #fafaf7;
   --canvas-ink: #0f0f0f;
   --canvas-accent: #b91c1c;
@@ -10,10 +10,97 @@
   --canvas-paper: #ffffff;
   --canvas-serif: "Newsreader", "Iowan Old Style", Georgia, serif;
   --canvas-mono: "JetBrains Mono", ui-monospace, monospace;
+  --canvas-node-radius: 0;
+  --canvas-edge-style: solid;
+  --canvas-node-shadow: none;
 }
+
+/* ---- Theme: Notebook ---- */
+
+html[data-theme="notebook"] {
+  --canvas-bg: #fbf5e9;
+  --canvas-ink: #1a1208;
+  --canvas-accent: #b85820;
+  --canvas-muted: #6b5a44;
+  --canvas-rule: #2a1f10;
+  --canvas-paper: #fff8ec;
+  --canvas-serif: "Caveat", "Bradley Hand", "Comic Sans MS", cursive;
+  --canvas-mono: "Caveat", "Bradley Hand", cursive;
+  --canvas-node-radius: 6px;
+  --canvas-edge-style: solid;
+  --canvas-node-shadow: 1px 1px 0 rgba(42, 31, 16, 0.4);
+}
+
+html[data-theme="notebook"] .canvas-node {
+  border-radius: var(--canvas-node-radius);
+  box-shadow: var(--canvas-node-shadow);
+  transform: rotate(-0.4deg);
+}
+html[data-theme="notebook"] .canvas-node--insight {
+  transform: rotate(0.6deg);
+}
+html[data-theme="notebook"] .react-flow__edge-path {
+  stroke-width: 1.6px;
+}
+html[data-theme="notebook"] .react-flow__edge-path[marker-end] {
+  /* leave default arrows; the wobble already reads as hand-drawn */
+}
+
+/* ---- Theme: Observatory ---- */
+
+html[data-theme="observatory"] {
+  --canvas-bg: #07090d;
+  --canvas-ink: #d8e2ee;
+  --canvas-accent: #6cd3ff;
+  --canvas-muted: #6a7a90;
+  --canvas-rule: #2a3a52;
+  --canvas-paper: #0c1320;
+  --canvas-serif: "Inter", "Helvetica Neue", system-ui, sans-serif;
+  --canvas-mono: "JetBrains Mono", ui-monospace, monospace;
+  --canvas-node-radius: 14px;
+  --canvas-edge-style: solid;
+  --canvas-node-shadow: 0 0 18px rgba(108, 211, 255, 0.18);
+}
+
+html[data-theme="observatory"] .canvas-node {
+  border-radius: var(--canvas-node-radius);
+  box-shadow: var(--canvas-node-shadow);
+  background: linear-gradient(180deg, var(--canvas-paper) 0%, #0a1220 100%);
+}
+html[data-theme="observatory"] .react-flow__edge-path {
+  stroke: var(--canvas-accent);
+  stroke-width: 1.2px;
+  filter: drop-shadow(0 0 4px rgba(108, 211, 255, 0.4));
+  opacity: 0.85;
+}
+html[data-theme="observatory"] .canvas-node--pulse {
+  animation: canvas-pulse-obs 1.4s ease-out;
+  border-color: var(--canvas-accent);
+}
+@keyframes canvas-pulse-obs {
+  0%   { box-shadow: 0 0 0 0 rgba(108, 211, 255, 0.6); }
+  60%  { box-shadow: 0 0 0 18px rgba(108, 211, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(108, 211, 255, 0); }
+}
+
+html[data-theme="observatory"] body {
+  background: var(--canvas-bg);
+}
+
+/* ---- Page-wide application ---- */
 
 html[data-theme="document"],
 html:not([data-theme]) {
+  background: var(--canvas-bg);
+  color: var(--canvas-ink);
+}
+
+html[data-theme="notebook"] {
+  background: var(--canvas-bg);
+  color: var(--canvas-ink);
+}
+
+html[data-theme="observatory"] {
   background: var(--canvas-bg);
   color: var(--canvas-ink);
 }
