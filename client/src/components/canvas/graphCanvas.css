@@ -1,0 +1,259 @@
+/* M3 Canvas — dark workstation aesthetic (scoped to .m3-canvas-surface). */
+/* Sits on top of the app-wide theme tokens but owns the graph view entirely. */
+
+.m3-canvas-surface {
+  --m3-bg: oklch(0.17 0.01 260);
+  --m3-surface: oklch(0.21 0.012 260);
+  --m3-surface-2: oklch(0.24 0.012 260);
+  --m3-line: oklch(0.32 0.012 260);
+  --m3-line-2: oklch(0.40 0.014 260);
+  --m3-ink: oklch(0.96 0.005 260);
+  --m3-muted: oklch(0.66 0.01 260);
+  --m3-dim: oklch(0.48 0.008 260);
+  --m3-accent: oklch(0.78 0.14 220);
+
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 57px);
+  background: var(--m3-bg);
+  color: var(--m3-ink);
+  overflow: hidden;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+.m3-canvas-surface[data-variant="cosmos"] .m3-graph {
+  background:
+    radial-gradient(circle at 20% 30%, oklch(0.22 0.02 260) 0%, transparent 60%),
+    radial-gradient(circle at 80% 70%, oklch(0.20 0.02 220) 0%, transparent 60%),
+    var(--m3-bg);
+}
+.m3-canvas-surface[data-variant="blueprint"] .m3-graph {
+  background-image:
+    linear-gradient(to right, oklch(0.22 0.01 260) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.22 0.01 260) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-color: var(--m3-bg);
+}
+
+.m3-graph {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* ----- Toolbar ----- */
+.m3-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  gap: 8px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  z-index: 10;
+}
+
+.m3-toolbar__seg,
+.m3-toolbar__zoom {
+  display: flex;
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.m3-toolbar button {
+  background: transparent;
+  border: none;
+  color: var(--m3-muted);
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.m3-toolbar button:hover {
+  color: var(--m3-ink);
+}
+.m3-toolbar button.on {
+  background: var(--m3-surface-2);
+  color: var(--m3-ink);
+}
+.m3-toolbar__zoom button {
+  padding: 6px 10px;
+}
+.m3-toolbar__zoom span {
+  padding: 6px 8px;
+  color: var(--m3-ink);
+}
+
+/* ----- Bottom-right stack ----- */
+.m3-bottom-right {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+  z-index: 10;
+}
+
+.m3-legend {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  color: var(--m3-muted);
+}
+.m3-legend__title {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+}
+.m3-legend__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--m3-ink);
+}
+
+.m3-minimap {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  padding: 8px;
+}
+.m3-minimap__label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  margin-bottom: 6px;
+}
+
+/* ----- Cite trail counter pill ----- */
+.m3-cited-strip {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 260px;
+}
+.m3-cited-strip__title {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+}
+.m3-cited-strip__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.m3-cited-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.m3-cited-item:hover {
+  background: var(--m3-surface-2);
+  border-color: var(--m3-line-2);
+}
+.m3-cited-idx {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--m3-muted);
+}
+.m3-cited-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ----- Animations ----- */
+@keyframes m3-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+@keyframes m3-flow {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -26;
+  }
+}
+
+/* ----- Chat dock overrides when rendered inside the dark canvas ----- */
+.m3-canvas-surface .chat-dock {
+  background: var(--m3-surface);
+  border-color: var(--m3-line);
+  color: var(--m3-ink);
+  font-family: Inter, system-ui, sans-serif;
+}
+.m3-canvas-surface .chat-dock--collapsed {
+  background: var(--m3-surface);
+  border-color: var(--m3-line);
+  color: var(--m3-ink);
+}
+.m3-canvas-surface .chat-dock__header {
+  border-color: var(--m3-line);
+  color: var(--m3-muted);
+}
+.m3-canvas-surface .chat-dock__end,
+.m3-canvas-surface .chat-dock__collapse {
+  border-color: var(--m3-line);
+  color: var(--m3-ink);
+  background: transparent;
+}
+.m3-canvas-surface .chat-dock__input {
+  border-color: var(--m3-line);
+}
+.m3-canvas-surface .chat-dock__input input {
+  color: var(--m3-ink);
+}
+.m3-canvas-surface .chat-dock__input input::placeholder {
+  color: var(--m3-muted);
+}
+.m3-canvas-surface .chat-dock__input button {
+  background: var(--m3-ink);
+  color: var(--m3-bg);
+}
+
+/* Menus sitting on top of the dark canvas: invert paper tokens locally so
+ * the existing inline classes still read legibly without a rewrite. */
+.m3-canvas-surface {
+  --canvas-paper: var(--m3-surface);
+  --canvas-bg: var(--m3-surface-2);
+  --canvas-ink: var(--m3-ink);
+  --canvas-muted: var(--m3-muted);
+  --canvas-rule: var(--m3-line);
+  --canvas-accent: oklch(0.78 0.14 220);
+}
