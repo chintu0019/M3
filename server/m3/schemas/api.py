@@ -286,6 +286,7 @@ class ChatThreadSummary(BaseModel):
     status: str
     created_at: datetime
     ended_at: datetime | None
+    crystallized_at: datetime | None = None
     message_count: int
 
 
@@ -299,3 +300,16 @@ class ChatMessageResponse(BaseModel):
 class ChatThreadDetail(ChatThreadSummary):
     messages: list[ChatMessageResponse]
     cited_entity_ids: list[uuid.UUID]
+
+
+# --- Crystallization (Phase D) ---
+
+
+class ThreadCrystallizeResponse(BaseModel):
+    thread_id: uuid.UUID
+    raw_item_id: uuid.UUID
+    enqueued: bool
+
+
+class SelfContextSettings(BaseModel):
+    enabled: bool

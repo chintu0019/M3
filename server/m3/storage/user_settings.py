@@ -75,3 +75,12 @@ class UserSettingsStore:
 
     def set_active_provider(self, name: str) -> None:
         self.set("active_provider", name)
+
+    # -- Self-context (Phase D) --
+
+    def get_self_context_enabled(self) -> bool:
+        return bool(self._data.get("self_context_enabled", True))
+
+    def set_self_context_enabled(self, enabled: bool) -> None:
+        self._data["self_context_enabled"] = bool(enabled)
+        self._save()

@@ -8,10 +8,11 @@ Crystallization (pushing a thread through the ingest pipeline)
 lands in Phase D.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,8 +23,11 @@ from m3.schemas.api import (
     ChatThreadDetail,
     ChatThreadSummary,
     PaginatedResponse,
+    ThreadCrystallizeResponse,
 )
-from m3.storage.models import ChatMessage, ChatThread, ChatThreadPage
+from m3.storage.models import ChatMessage, ChatThread, ChatThreadPage, RawItem
+
+logger = logging.getLogger("m3.threads")
 
 router = APIRouter(prefix="/api/v1/chat/threads", tags=["chat-threads"])
 
@@ -36,6 +40,7 @@ def _build_summary(t: ChatThread, message_count: int) -> ChatThreadSummary:
         status=t.status,
         created_at=t.created_at,
         ended_at=t.ended_at,
+        crystallized_at=t.crystallized_at,
         message_count=message_count,
     )
 
@@ -133,6 +138,7 @@ async def get_thread(
         status=t.status,
         created_at=t.created_at,
         ended_at=t.ended_at,
+        crystallized_at=t.crystallized_at,
         message_count=count,
         messages=[
             ChatMessageResponse(
@@ -159,3 +165,67 @@ async def end_thread(
         await db.commit()
         await db.refresh(t)
     return await _summary(db, t)
+
+
+@router.post("/{thread_id}/crystallize", response_model=ThreadCrystallizeResponse)
+async def crystallize_thread(
+    thread_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_auth),
+):
+    t = await db.get(ChatThread, thread_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if t.crystallized_at is not None:
+        raise HTTPException(status_code=409, detail="Already crystallized")
+
+    msg_rows = (
+        await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.thread_id == thread_id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+    ).scalars().all()
+
+    has_assistant = any(m.role == "assistant" and m.content.strip() for m in msg_rows)
+    if not has_assistant:
+        raise HTTPException(
+            status_code=400, detail="Thread has no assistant response to crystallize"
+        )
+
+    transcript = "\n\n".join(
+        f"{m.role.upper()}: {m.content.strip()}" for m in msg_rows if m.content.strip()
+    )
+
+    raw_item = RawItem(
+        content_text=transcript,
+        content_type="conversation",
+        source_channel="chat",
+        source_metadata={"thread_id": str(thread_id), "title": t.title},
+        status="pending",
+    )
+    db.add(raw_item)
+    if t.status != "ended":
+        t.status = "ended"
+        t.ended_at = datetime.now(timezone.utc)
+    t.crystallized_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(raw_item)
+
+    enqueued = False
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool is not None:
+        try:
+            await arq_pool.enqueue_job("process_item", str(raw_item.id))
+            enqueued = True
+        except Exception as exc:  # pragma: no cover — surface, don't crash
+            logger.warning("ARQ enqueue failed: %s", exc)
+    else:
+        logger.warning("No ARQ pool on app.state; relying on drain_pending_items")
+
+    return ThreadCrystallizeResponse(
+        thread_id=thread_id,
+        raw_item_id=raw_item.id,
+        enqueued=enqueued,
+    )

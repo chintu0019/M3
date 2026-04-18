@@ -26,7 +26,10 @@ export default function EntityNode({ data: node }: EntityNodeProps) {
     >
       <Handle type="target" position={Position.Top} />
       <div className="canvas-node__title">{label}</div>
-      {data.entity_type && (
+      {data.entity_type === "self" && (
+        <div className="canvas-node__self-badge">self</div>
+      )}
+      {data.entity_type && data.entity_type !== "self" && (
         <div className="canvas-node__meta">{data.entity_type}</div>
       )}
       {hasPage && data.overview && (

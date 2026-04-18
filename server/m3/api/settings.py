@@ -11,6 +11,8 @@ from m3.api.deps import verify_auth
 from m3.config import LLMProviderConfig
 from m3.core.engines.loader import load_engine
 from m3.core.llm import create_llm_provider
+from m3.schemas.api import SelfContextSettings
+from m3.storage.user_settings import UserSettingsStore
 
 logger = logging.getLogger("m3.settings")
 
@@ -222,3 +224,26 @@ async def delete_provider(
 
     logger.info(f"Deleted provider '{name}'")
     return _build_response(request)
+
+
+# --- Self-context (Phase D) ---
+
+
+@router.get("/self-context", response_model=SelfContextSettings)
+async def get_self_context_settings(
+    request: Request,
+    _auth: str = Depends(verify_auth),
+):
+    store: UserSettingsStore = request.app.state.user_store
+    return SelfContextSettings(enabled=store.get_self_context_enabled())
+
+
+@router.put("/self-context", response_model=SelfContextSettings)
+async def set_self_context_settings(
+    body: SelfContextSettings,
+    request: Request,
+    _auth: str = Depends(verify_auth),
+):
+    store: UserSettingsStore = request.app.state.user_store
+    store.set_self_context_enabled(body.enabled)
+    return SelfContextSettings(enabled=store.get_self_context_enabled())

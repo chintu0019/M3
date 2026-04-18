@@ -166,6 +166,7 @@ async def get_canvas(
                     "status": t.status,
                     "created_at": t.created_at.isoformat(),
                     "ended_at": t.ended_at.isoformat() if t.ended_at else None,
+                    "crystallized_at": t.crystallized_at.isoformat() if t.crystallized_at else None,
                 },
                 x=x, y=y, width=w, height=h,
             )
