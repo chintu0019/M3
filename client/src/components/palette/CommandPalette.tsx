@@ -1,10 +1,12 @@
 import { Command } from "cmdk";
 import { useEffect, useState } from "react";
 import { api, EntitySummary } from "../../api/client";
+import { THEMES, Theme } from "../../hooks/useTheme";
 
 export type PaletteAction =
   | { kind: "focus-entity"; id: string; label: string }
-  | { kind: "open-drawer"; pane: "library" | "entities" | "insights" | "settings" };
+  | { kind: "open-drawer"; pane: "library" | "entities" | "insights" | "settings" }
+  | { kind: "set-theme"; theme: Theme };
 
 interface Props {
   onAction: (a: PaletteAction) => void;
@@ -73,6 +75,17 @@ export default function CommandPalette({ onAction, onClose }: Props) {
               >
                 Open Settings
               </Command.Item>
+            </Command.Group>
+
+            <Command.Group heading="Theme">
+              {THEMES.map((t) => (
+                <Command.Item
+                  key={t}
+                  onSelect={() => onAction({ kind: "set-theme", theme: t })}
+                >
+                  Switch theme: {t}
+                </Command.Item>
+              ))}
             </Command.Group>
 
             {entities.length > 0 && (

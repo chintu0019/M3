@@ -41,7 +41,7 @@ interface PendingNewNode {
 }
 
 function CanvasInner() {
-  useTheme();
+  const { setTheme } = useTheme();
   const {
     nodes,
     edges,
@@ -198,6 +198,10 @@ function CanvasInner() {
         setDrawerPane(a.pane);
         return;
       }
+      if (a.kind === "set-theme") {
+        void setTheme(a.theme);
+        return;
+      }
       if (a.kind === "focus-entity") {
         const nodeId = `entity:${a.id}`;
         const n = getNode(nodeId);
@@ -211,7 +215,7 @@ function CanvasInner() {
         }
       }
     },
-    [getNode, setCenter],
+    [getNode, setCenter, setTheme],
   );
 
   const onCite = useCallback(
