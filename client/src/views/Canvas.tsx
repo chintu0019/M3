@@ -23,6 +23,7 @@ import CommandPalette, { PaletteAction } from "../components/palette/CommandPale
 import ToolDrawer, { DrawerPane } from "../components/drawer/ToolDrawer";
 import { useCanvasData, toFlowNode, toFlowEdge } from "../hooks/useCanvasData";
 import { useHotkeys } from "../hooks/useHotkeys";
+import { useTheme } from "../hooks/useTheme";
 import { api } from "../api/client";
 
 interface PendingLink {
@@ -40,6 +41,7 @@ interface PendingNewNode {
 }
 
 function CanvasInner() {
+  useTheme();
   const {
     nodes,
     edges,
