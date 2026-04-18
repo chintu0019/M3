@@ -23,6 +23,7 @@ import CommandPalette, { PaletteAction } from "../components/palette/CommandPale
 import ToolDrawer, { DrawerPane } from "../components/drawer/ToolDrawer";
 import { useCanvasData, toFlowNode, toFlowEdge } from "../hooks/useCanvasData";
 import { useHotkeys } from "../hooks/useHotkeys";
+import { useTheme } from "../hooks/useTheme";
 import { api } from "../api/client";
 
 interface PendingLink {
@@ -40,6 +41,7 @@ interface PendingNewNode {
 }
 
 function CanvasInner() {
+  const { setTheme } = useTheme();
   const {
     nodes,
     edges,
@@ -196,6 +198,10 @@ function CanvasInner() {
         setDrawerPane(a.pane);
         return;
       }
+      if (a.kind === "set-theme") {
+        void setTheme(a.theme);
+        return;
+      }
       if (a.kind === "focus-entity") {
         const nodeId = `entity:${a.id}`;
         const n = getNode(nodeId);
@@ -209,7 +215,7 @@ function CanvasInner() {
         }
       }
     },
-    [getNode, setCenter],
+    [getNode, setCenter, setTheme],
   );
 
   const onCite = useCallback(

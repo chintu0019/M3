@@ -475,6 +475,13 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       }),
+    getTheme: () => request<{ theme: string }>("/api/v1/settings/theme"),
+    setTheme: (theme: string) =>
+      request<{ theme: string }>("/api/v1/settings/theme", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theme }),
+      }),
   },
 
   chat: async function* (

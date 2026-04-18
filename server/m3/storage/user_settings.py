@@ -84,3 +84,17 @@ class UserSettingsStore:
     def set_self_context_enabled(self, enabled: bool) -> None:
         self._data["self_context_enabled"] = bool(enabled)
         self._save()
+
+    # -- Theme (Phase E) --
+
+    THEMES = ("document", "notebook", "observatory")
+
+    def get_theme(self) -> str:
+        t = self._data.get("theme", "document")
+        return t if t in self.THEMES else "document"
+
+    def set_theme(self, theme: str) -> None:
+        if theme not in self.THEMES:
+            raise ValueError(f"Unknown theme: {theme}")
+        self._data["theme"] = theme
+        self._save()
