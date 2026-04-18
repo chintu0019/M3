@@ -313,3 +313,7 @@ class ThreadCrystallizeResponse(BaseModel):
 
 class SelfContextSettings(BaseModel):
     enabled: bool
+
+
+class ThemeSetting(BaseModel):
+    theme: str  # "document" | "notebook" | "observatory"

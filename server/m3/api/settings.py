@@ -11,7 +11,7 @@ from m3.api.deps import verify_auth
 from m3.config import LLMProviderConfig
 from m3.core.engines.loader import load_engine
 from m3.core.llm import create_llm_provider
-from m3.schemas.api import SelfContextSettings
+from m3.schemas.api import SelfContextSettings, ThemeSetting
 from m3.storage.user_settings import UserSettingsStore
 
 logger = logging.getLogger("m3.settings")
@@ -247,3 +247,29 @@ async def set_self_context_settings(
     store: UserSettingsStore = request.app.state.user_store
     store.set_self_context_enabled(body.enabled)
     return SelfContextSettings(enabled=store.get_self_context_enabled())
+
+
+# --- Theme (Phase E) ---
+
+
+@router.get("/theme", response_model=ThemeSetting)
+async def get_theme_setting(
+    request: Request,
+    _auth: str = Depends(verify_auth),
+):
+    store: UserSettingsStore = request.app.state.user_store
+    return ThemeSetting(theme=store.get_theme())
+
+
+@router.put("/theme", response_model=ThemeSetting)
+async def set_theme_setting(
+    body: ThemeSetting,
+    request: Request,
+    _auth: str = Depends(verify_auth),
+):
+    store: UserSettingsStore = request.app.state.user_store
+    try:
+        store.set_theme(body.theme)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return ThemeSetting(theme=store.get_theme())
