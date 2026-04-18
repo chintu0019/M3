@@ -249,6 +249,7 @@ export interface CanvasEdge {
   target: string;
   edge_type: string;
   weight: number;
+  created_at?: string | null;
 }
 
 export interface CanvasResponse {

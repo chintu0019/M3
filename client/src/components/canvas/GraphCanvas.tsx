@@ -10,12 +10,14 @@ export interface GraphNode {
   cat: string;
   overview: string | null;
   facts: number;
+  createdAt: string | null;
 }
 
 export interface GraphLink {
   s: string;
   t: string;
   type: string;
+  createdAt: string | null;
 }
 
 export interface CameraRef {
@@ -44,6 +46,7 @@ export interface GraphCanvasProps {
   onNodeLink?: (sourceId: string, targetId: string, screenX: number, screenY: number) => void;
   onNodeDragEnd?: (id: string, x: number, y: number) => void;
   egoId?: string | null;
+  timeCutoff?: string | null; // ISO date; nodes/edges created after this are hidden
 }
 
 export default function GraphCanvas(props: GraphCanvasProps) {
@@ -67,7 +70,14 @@ export default function GraphCanvas(props: GraphCanvasProps) {
     onNodeLink,
     onNodeDragEnd,
     egoId,
+    timeCutoff,
   } = props;
+
+  // A node or edge is visible iff its createdAt is ≤ cutoff, or we have no
+  // cutoff at all, or the item's createdAt is unknown (don't hide data
+  // without a timestamp — user would lose it entirely).
+  const visibleAt = (iso: string | null) =>
+    !timeCutoff || !iso || iso.slice(0, 10) <= timeCutoff;
 
   void _cameraVersion;
 
@@ -419,6 +429,11 @@ export default function GraphCanvas(props: GraphCanvasProps) {
             const a = sim.byId.get(l.s);
             const b = sim.byId.get(l.t);
             if (!a || !b) return null;
+            if (!visibleAt(l.createdAt)) return null;
+            const aNode = nodesById.get(l.s);
+            const bNode = nodesById.get(l.t);
+            if (aNode && !visibleAt(aNode.createdAt)) return null;
+            if (bNode && !visibleAt(bNode.createdAt)) return null;
 
             const key = `${l.s}→${l.t}`;
             const isFlowing = flowEdges.has(key);
@@ -553,6 +568,7 @@ export default function GraphCanvas(props: GraphCanvasProps) {
             .map((s) => {
               const n = nodesById.get(s.id);
               if (!n) return null;
+              if (!visibleAt(n.createdAt)) return null;
               const hl = hasHL && highlighted.has(s.id);
               const dim = hasHL && !hl;
               const pre = preHighlight && preHighlight.has(s.id);

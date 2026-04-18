@@ -19,6 +19,245 @@
   color: var(--m3-ink);
   overflow: hidden;
   font-family: Inter, system-ui, -apple-system, sans-serif;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+}
+
+.m3-canvas-area {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--m3-bg);
+}
+
+/* ----- Left chat rail (design-faithful port of ChatRail prototype) ----- */
+.m3-chat-rail {
+  background: var(--m3-surface);
+  border-right: 1px solid var(--m3-line);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  color: var(--m3-ink);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+.m3-chat-rail__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--m3-line);
+}
+.m3-chat-rail__title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.m3-chat-rail__logo {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: var(--m3-ink);
+  color: var(--m3-bg);
+  font-weight: 700;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0;
+}
+
+.m3-btn-ghost {
+  background: transparent;
+  border: 1px solid var(--m3-line);
+  color: var(--m3-muted);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.m3-btn-ghost:hover:not(:disabled) {
+  color: var(--m3-ink);
+  border-color: var(--m3-line-2);
+}
+.m3-btn-ghost:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.m3-chat-rail__scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.m3-chat-rail__scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.m3-chat-rail__scroll::-webkit-scrollbar-thumb {
+  background: var(--m3-line);
+  border-radius: 3px;
+}
+
+.m3-chat-rail__empty-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+  margin-bottom: 10px;
+}
+.m3-chat-rail__empty-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--m3-dim);
+}
+
+.m3-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.m3-turn__role {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+}
+.m3-turn--user .m3-turn__role {
+  color: var(--m3-accent);
+}
+.m3-turn__body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--m3-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.m3-turn--user .m3-turn__body {
+  color: var(--m3-ink);
+  font-weight: 500;
+}
+.m3-turn--ai .m3-turn__body {
+  color: oklch(0.86 0.008 260);
+}
+
+.m3-cite {
+  display: inline;
+  background: transparent;
+  border: none;
+  color: var(--m3-ink);
+  font: inherit;
+  padding: 0 1px;
+  cursor: pointer;
+  border-bottom: 1px dashed currentColor;
+  transition: background 120ms;
+}
+.m3-cite:hover {
+  background: oklch(0.28 0.014 260);
+}
+
+.m3-chat-rail__streaming {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+}
+.m3-chat-rail__streaming .m3-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--m3-muted);
+  animation: m3-blink 1.2s ease-in-out infinite;
+}
+.m3-chat-rail__streaming .m3-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.m3-chat-rail__streaming .m3-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes m3-blink {
+  0%, 80%, 100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.m3-cited-panel {
+  border-top: 1px solid var(--m3-line);
+  padding: 12px 16px 10px;
+}
+.m3-cited-panel__title {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+  margin-bottom: 8px;
+}
+.m3-cited-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.m3-cited-list li {
+  list-style: none;
+}
+
+.m3-chat-rail__input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--m3-line);
+  background: var(--m3-surface);
+}
+.m3-chat-rail__input input {
+  flex: 1;
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 150ms;
+}
+.m3-chat-rail__input input:focus {
+  border-color: var(--m3-accent);
+}
+.m3-chat-rail__input input::placeholder {
+  color: var(--m3-muted);
+}
+.m3-chat-rail__input button {
+  background: var(--m3-ink);
+  color: var(--m3-bg);
+  border: none;
+  width: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.m3-chat-rail__input button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .m3-canvas-surface[data-variant="cosmos"] .m3-graph {
@@ -135,49 +374,86 @@
   margin-bottom: 6px;
 }
 
-/* ----- Cite trail counter pill ----- */
-.m3-cited-strip {
+/* ----- Time slider (bottom-center) ----- */
+.m3-bottom-center {
   position: absolute;
-  top: 14px;
-  left: 14px;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 10;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-width: 260px;
 }
-.m3-cited-strip__title {
+
+.m3-timeslider {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  padding: 10px 14px;
+  width: 380px;
+  max-width: calc(100vw - 360px);
+}
+.m3-timeslider__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.m3-timeslider__label {
   font-family: "JetBrains Mono", monospace;
   font-size: 9.5px;
   letter-spacing: 0.12em;
   color: var(--m3-muted);
 }
-.m3-cited-strip__list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.m3-timeslider__value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--m3-ink);
 }
+.m3-timeslider__track {
+  position: relative;
+  height: 4px;
+  margin-top: 8px;
+  background: var(--m3-line);
+  border-radius: 2px;
+}
+.m3-timeslider__fill {
+  height: 100%;
+  background: var(--m3-accent);
+  border-radius: 2px;
+}
+.m3-timeslider__track input {
+  position: absolute;
+  inset: -10px 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.m3-timeslider__ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9.5px;
+  color: var(--m3-muted);
+}
+
+/* ----- Cited-list items (used inside the left rail's cited panel) ----- */
 .m3-cited-item {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--m3-surface);
-  border: 1px solid var(--m3-line);
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--m3-ink);
   font: inherit;
   font-size: 12.5px;
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-radius: 4px;
   cursor: pointer;
   text-align: left;
 }
 .m3-cited-item:hover {
   background: var(--m3-surface-2);
-  border-color: var(--m3-line-2);
+  border-color: var(--m3-line);
 }
 .m3-cited-idx {
   font-family: "JetBrains Mono", monospace;
@@ -189,6 +465,9 @@
   height: 6px;
   border-radius: 50%;
   flex: none;
+}
+.m3-cited-name {
+  color: oklch(0.9 0.008 260);
 }
 
 /* ----- Animations ----- */

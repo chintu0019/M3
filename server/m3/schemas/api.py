@@ -217,6 +217,7 @@ class CanvasEdge(BaseModel):
     target: str  # node id
     edge_type: str  # "related", "references", etc.
     weight: float = 1.0
+    created_at: str | None = None  # ISO-8601; powers the time-scrub filter
 
 
 class CanvasResponse(BaseModel):

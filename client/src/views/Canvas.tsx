@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "../components/canvas/canvas.css";
 import "../components/canvas/graphCanvas.css";
-import ChatDock from "../components/chat/ChatDock";
+import ChatRail from "../components/chat/ChatRail";
 import NodeEditor from "../components/canvas/NodeEditor";
 import LinkTypeMenu from "../components/canvas/LinkTypeMenu";
 import NewNodeMenu from "../components/canvas/NewNodeMenu";
@@ -15,7 +15,7 @@ import GraphCanvas, {
 } from "../components/canvas/GraphCanvas";
 import GraphToolbar from "../components/canvas/GraphToolbar";
 import { GraphMinimap, GraphLegend } from "../components/canvas/GraphMinimap";
-import { entityColor } from "../components/canvas/graphStyle";
+import TimeSlider from "../components/canvas/TimeSlider";
 import { initSim, PhysicsSim } from "../components/canvas/graphPhysics";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { useTheme } from "../hooks/useTheme";
@@ -46,8 +46,6 @@ interface CitedEntry {
   name: string;
   cat: string;
 }
-
-const EMPTY_SET: Set<string> = new Set();
 
 function catOf(n: CanvasNode): string {
   if (n.node_type === "entity") return n.data.entity_type || "entity";
@@ -118,6 +116,7 @@ export default function Canvas() {
         cat: catOf(n),
         overview: n.data.overview ?? n.data.description ?? null,
         facts: n.data.facts_since_render ?? 0,
+        createdAt: n.data.created_at ?? null,
       })),
     [rawNodes],
   );
@@ -128,6 +127,7 @@ export default function Canvas() {
         s: e.source,
         t: e.target,
         type: e.edge_type,
+        createdAt: e.created_at ?? null,
       })),
     [rawEdges],
   );
@@ -344,9 +344,51 @@ export default function Canvas() {
 
   // --- Chat-driven highlighting ---
   const [highlighted, setHighlighted] = useState<Set<string>>(new Set());
+  const [preHighlight, setPreHighlight] = useState<Set<string>>(new Set());
   const [trail, setTrail] = useState<Array<{ from: string; to: string }>>([]);
+
+  const onDraft = useCallback(
+    (text: string) => {
+      const q = text.trim().toLowerCase();
+      if (!q) {
+        setPreHighlight(new Set());
+        return;
+      }
+      const tokens = q.split(/\s+/).filter((t) => t.length > 3);
+      if (!tokens.length) {
+        setPreHighlight(new Set());
+        return;
+      }
+      const hits = new Set<string>();
+      graphNodes.forEach((n) => {
+        const hay = `${n.name} ${n.overview ?? ""} ${n.cat}`.toLowerCase();
+        if (tokens.some((t) => hay.includes(t))) hits.add(n.id);
+      });
+      setPreHighlight(hits);
+    },
+    [graphNodes],
+  );
+
+  // Time range for the slider: earliest created_at across all nodes → today.
+  const timeRange = useMemo(() => {
+    let minIso: string | null = null;
+    graphNodes.forEach((n) => {
+      if (!n.createdAt) return;
+      const d = n.createdAt.slice(0, 10);
+      if (!minIso || d < minIso) minIso = d;
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    return { min: minIso ?? today, max: today };
+  }, [graphNodes]);
+
+  const [timeCutoff, setTimeCutoff] = useState<string | null>(null);
+  // Default cutoff to "now" once range is known, so the slider sits at the
+  // right edge showing everything — user drags left to rewind.
+  useEffect(() => {
+    if (timeCutoff == null) setTimeCutoff(timeRange.max);
+  }, [timeRange.max, timeCutoff]);
   const [flowEdges, setFlowEdges] = useState<Set<string>>(new Set());
-  const [cited, setCited] = useState<CitedEntry[]>([]);
+  const [, setCited] = useState<CitedEntry[]>([]);
   const [pulseId, setPulseId] = useState<string | null>(null);
 
   function findEdgeKey(a: string, b: string): string | null {
@@ -576,6 +618,13 @@ export default function Canvas() {
   );
   useHotkeys(hotkeys);
 
+  const focusEntityById = useCallback(
+    (entityId: string) => {
+      onNodeClick(`entity:${entityId}`);
+    },
+    [onNodeClick],
+  );
+
   if (loading && !rawNodes.length) {
     return (
       <div className="m3-canvas-surface" style={{ padding: 24 }}>
@@ -592,73 +641,68 @@ export default function Canvas() {
   }
 
   return (
-    <div className="m3-canvas-surface" data-variant={variant} ref={viewRef}>
-      {sim && graphNodes.length > 0 && (
-        <>
-          <GraphCanvas
-            variant={variant}
-            showHulls={true}
-            nodes={graphNodes}
-            links={graphLinks}
-            sim={sim}
-            cameraRef={cameraRef}
-            cameraVersion={camVer}
-            onCameraChange={bumpCam}
-            highlighted={highlighted}
-            preHighlight={EMPTY_SET}
-            trail={trail}
-            flowEdges={flowEdges}
-            pulseId={pulseId}
-            onNodeClick={onNodeClick}
-            onNodeDoubleClick={onNodeDoubleClick}
-            onPaneDoubleClick={onPaneDoubleClick}
-            onNodeLink={onNodeLink}
-            onNodeDragEnd={onNodeDragEnd}
-            egoId={egoId}
-          />
-          <GraphToolbar
-            variant={variant}
-            setVariant={setVariant}
-            zoom={cameraRef.current.k}
-            setZoom={setZoom}
-            onFit={() => fitTo(sim.state.map((s) => s.id))}
-          />
-          <div className="m3-bottom-right">
-            <GraphLegend />
-            <GraphMinimap
+    <div className="m3-canvas-surface" data-variant={variant}>
+      <ChatRail
+        onCite={onCite}
+        onThreadChanged={onThreadChanged}
+        onDraftChange={onDraft}
+        onFocusEntity={focusEntityById}
+      />
+      <main className="m3-canvas-area" ref={viewRef}>
+        {sim && graphNodes.length > 0 && (
+          <>
+            <GraphCanvas
+              variant={variant}
+              showHulls={true}
+              nodes={graphNodes}
+              links={graphLinks}
               sim={sim}
-              camera={cameraRef.current}
-              viewSize={viewSize}
+              cameraRef={cameraRef}
+              cameraVersion={camVer}
+              onCameraChange={bumpCam}
               highlighted={highlighted}
-              nodeCat={(id) => sim.byId.get(id)?.cat || "entity"}
+              preHighlight={preHighlight}
+              trail={trail}
+              timeCutoff={timeCutoff}
+              flowEdges={flowEdges}
+              pulseId={pulseId}
+              onNodeClick={onNodeClick}
+              onNodeDoubleClick={onNodeDoubleClick}
+              onPaneDoubleClick={onPaneDoubleClick}
+              onNodeLink={onNodeLink}
+              onNodeDragEnd={onNodeDragEnd}
+              egoId={egoId}
             />
-          </div>
-          {cited.length > 0 && (
-            <div className="m3-cited-strip">
-              <div className="m3-cited-strip__title">Cited, in order</div>
-              <ol className="m3-cited-strip__list">
-                {cited.map((c, i) => (
-                  <li key={c.id}>
-                    <button
-                      className="m3-cited-item"
-                      onClick={() => onNodeClick(c.id)}
-                    >
-                      <span className="m3-cited-idx">
-                        {String(i + 1).padStart(2, "0")}
-                      </span>
-                      <span
-                        className="m3-cited-dot"
-                        style={{ background: entityColor(c.cat) }}
-                      />
-                      <span>{c.name}</span>
-                    </button>
-                  </li>
-                ))}
-              </ol>
+            <GraphToolbar
+              variant={variant}
+              setVariant={setVariant}
+              zoom={cameraRef.current.k}
+              setZoom={setZoom}
+              onFit={() => fitTo(sim.state.map((s) => s.id))}
+            />
+            <div className="m3-bottom-right">
+              <GraphLegend />
+              <GraphMinimap
+                sim={sim}
+                camera={cameraRef.current}
+                viewSize={viewSize}
+                highlighted={highlighted}
+                nodeCat={(id) => sim.byId.get(id)?.cat || "entity"}
+              />
             </div>
-          )}
-        </>
-      )}
+            {timeRange.min !== timeRange.max && timeCutoff && (
+              <div className="m3-bottom-center">
+                <TimeSlider
+                  value={timeCutoff}
+                  onChange={setTimeCutoff}
+                  min={timeRange.min}
+                  max={timeRange.max}
+                />
+              </div>
+            )}
+          </>
+        )}
+      </main>
 
       {editingEntityId && (
         <NodeEditor
@@ -706,8 +750,6 @@ export default function Canvas() {
       )}
 
       <ToolDrawer open={drawerPane} onClose={() => setDrawerPane(null)} />
-
-      <ChatDock onCite={onCite} onThreadChanged={onThreadChanged} />
     </div>
   );
 }

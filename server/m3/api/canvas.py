@@ -136,6 +136,7 @@ async def get_canvas(
                     "has_page": bool(e.page_content),
                     "overview": e.page_overview,
                     "facts_since_render": e.facts_since_render or 0,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
                 },
                 x=x, y=y, width=w, height=h,
             )
@@ -151,6 +152,7 @@ async def get_canvas(
                     "insight_type": i.insight_type,
                     "description": i.description,
                     "status": i.status,
+                    "created_at": i.created_at.isoformat() if i.created_at else None,
                 },
                 x=x, y=y, width=w, height=h,
             )
@@ -179,6 +181,7 @@ async def get_canvas(
             target=_entity_node_id(el.target_entity_id),
             edge_type=el.link_type,
             weight=float(el.weight or 1),
+            created_at=el.created_at.isoformat() if el.created_at else None,
         )
         for el in edge_rows
     ]
@@ -190,6 +193,7 @@ async def get_canvas(
                 target=_entity_node_id(ctp.entity_id),
                 edge_type="cited_by_thread",
                 weight=float(ctp.citation_count or 1),
+                created_at=None,
             )
         )
 
