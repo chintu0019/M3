@@ -117,8 +117,6 @@ class Compiler:
                     )
                     item.status = "done"
                     item.processed_at = datetime.now(timezone.utc)
-                    if touched:
-                        item.error_message = f"Touched {len(touched)} self entities"
                     await session.commit()
                     logger.info(
                         "Crystallized item %s: touched %d self entities",

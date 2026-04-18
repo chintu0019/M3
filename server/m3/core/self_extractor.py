@@ -104,9 +104,11 @@ async def extract_self_facts(
     touched: list[uuid.UUID] = []
     async with db_factory() as session:
         for u in updates:
+            if not isinstance(u, dict):
+                continue
             name = (u.get("canonical_name") or "").strip().lower()
             page = u.get("page_content")
-            if not name or page is None:
+            if not name or not isinstance(page, str):
                 continue
             ent = (
                 await session.execute(
