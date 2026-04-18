@@ -220,6 +220,7 @@ export interface ChatThreadSummary {
   status: string;
   created_at: string;
   ended_at: string | null;
+  crystallized_at: string | null;
   message_count: number;
 }
 
@@ -403,6 +404,11 @@ export const api = {
     get: (id: string) => request<ChatThreadDetail>(`/api/v1/chat/threads/${id}`),
     end: (id: string) =>
       request<ChatThreadSummary>(`/api/v1/chat/threads/${id}/end`, { method: "POST" }),
+    crystallize: (id: string) =>
+      request<{ thread_id: string; raw_item_id: string; enqueued: boolean }>(
+        `/api/v1/chat/threads/${id}/crystallize`,
+        { method: "POST" },
+      ),
   },
 
   insights: {
@@ -460,6 +466,13 @@ export const api = {
     deleteProvider: (name: string) =>
       request<LLMSettings>(`/api/v1/settings/llm/providers/${encodeURIComponent(name)}`, {
         method: "DELETE",
+      }),
+    getSelfContext: () => request<{ enabled: boolean }>("/api/v1/settings/self-context"),
+    setSelfContext: (enabled: boolean) =>
+      request<{ enabled: boolean }>("/api/v1/settings/self-context", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
       }),
   },
 
