@@ -132,6 +132,20 @@ export default function Canvas() {
     [rawEdges],
   );
 
+  // Flat list of entity mentionables (no node-type prefix) for ChatRail so it
+  // can detect plain-text entity names in the assistant stream.
+  const mentionables = useMemo(
+    () =>
+      rawNodes
+        .filter((n) => n.node_type === "entity")
+        .map((n) => ({
+          id: n.id.slice("entity:".length),
+          name: n.label,
+          type: n.data.entity_type || "entity",
+        })),
+    [rawNodes],
+  );
+
   // Look for a "self" entity so we can pin it as the ego node if present.
   const egoId = useMemo(() => {
     const self = rawNodes.find((n) => n.node_type === "entity" && n.data.entity_type === "self");
@@ -322,14 +336,25 @@ export default function Canvas() {
     [sim, viewSize.w, viewSize.h],
   );
 
-  // Fit on first load once sim + size are known.
+  // Fit on first load once sim + size are known. If there's an ego node,
+  // start with a tighter view centred on it + direct neighbours, otherwise
+  // fit the whole graph (labels now render down to 32% so this is readable).
   const didInitialFitRef = useRef(false);
   useEffect(() => {
     if (didInitialFitRef.current) return;
     if (!sim || viewSize.w < 50) return;
     didInitialFitRef.current = true;
-    fitTo(sim.state.map((s) => s.id));
-  }, [sim, viewSize.w, fitTo]);
+    if (egoId && sim.byId.has(egoId)) {
+      const neighbours = new Set<string>([egoId]);
+      rawEdges.forEach((e) => {
+        if (e.source === egoId) neighbours.add(e.target);
+        else if (e.target === egoId) neighbours.add(e.source);
+      });
+      fitTo(Array.from(neighbours), 160, 400);
+    } else {
+      fitTo(sim.state.map((s) => s.id));
+    }
+  }, [sim, viewSize.w, fitTo, egoId, rawEdges]);
 
   function setZoom(newK: number) {
     const k = Math.max(0.2, Math.min(3.5, newK));
@@ -405,7 +430,6 @@ export default function Canvas() {
       const s = sim.byId.get(nodeId);
       if (!s) return;
 
-      // Spotlight + pulse + trail.
       setHighlighted((prev) => {
         const next = new Set(prev);
         next.add(nodeId);
@@ -416,8 +440,12 @@ export default function Canvas() {
         setPulseId((cur) => (cur === nodeId ? null : cur));
       }, 1400);
 
+      let allCitedIds: string[] = [];
       setCited((prev) => {
-        if (prev.some((c) => c.id === nodeId)) return prev;
+        if (prev.some((c) => c.id === nodeId)) {
+          allCitedIds = prev.map((c) => c.id);
+          return prev;
+        }
         const entry: CitedEntry = {
           id: nodeId,
           name: cite.name,
@@ -443,16 +471,25 @@ export default function Canvas() {
           }
           setTrail((t) => [...t, { from: last.id, to: nodeId }]);
         }
-        return [...prev, entry];
+        const next = [...prev, entry];
+        allCitedIds = next.map((c) => c.id);
+        return next;
       });
 
-      // Pan to the node without zooming out too much.
-      const k = Math.max(1.1, cameraRef.current.k);
-      const targetX = viewSize.w / 2 - s.x * k;
-      const targetY = viewSize.h / 2 - s.y * k;
-      animateCamera({ x: targetX, y: targetY, k }, 450);
+      // Auto-pan + fit to the full cited cluster so the user always sees every
+      // entity that's been mentioned so far, not just the latest one.
+      requestAnimationFrame(() => {
+        if (allCitedIds.length >= 2) {
+          fitTo(allCitedIds, 200, 600);
+        } else {
+          const k = Math.max(1.1, cameraRef.current.k);
+          const targetX = viewSize.w / 2 - s.x * k;
+          const targetY = viewSize.h / 2 - s.y * k;
+          animateCamera({ x: targetX, y: targetY, k }, 450);
+        }
+      });
     },
-    [rawNodes, sim, viewSize.w, viewSize.h, rawEdges],
+    [rawNodes, sim, viewSize.w, viewSize.h, rawEdges, fitTo],
   );
 
   const onThreadChanged = useCallback(
@@ -647,6 +684,7 @@ export default function Canvas() {
         onThreadChanged={onThreadChanged}
         onDraftChange={onDraft}
         onFocusEntity={focusEntityById}
+        mentionables={mentionables}
       />
       <main className="m3-canvas-area" ref={viewRef}>
         {sim && graphNodes.length > 0 && (

@@ -2,11 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ChatCite } from "../../api/client";
 import { entityColor } from "../canvas/graphStyle";
 
+export interface MentionableEntity {
+  id: string; // plain entity uuid, no "entity:" prefix
+  name: string;
+  type: string;
+}
+
 export interface ChatRailProps {
   onCite: (c: ChatCite) => void;
   onThreadChanged: (threadId: string | null) => void;
   onDraftChange?: (text: string) => void;
   onFocusEntity: (entityId: string) => void;
+  /** Full entity list used for plain-text mention detection when the LLM
+   * forgets the [[brackets]] format. Matched case-insensitively on word
+   * boundaries. */
+  mentionables: MentionableEntity[];
 }
 
 interface Turn {
@@ -26,6 +36,7 @@ export default function ChatRail({
   onThreadChanged,
   onDraftChange,
   onFocusEntity,
+  mentionables,
 }: ChatRailProps) {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -34,6 +45,54 @@ export default function ChatRail({
   const [crystallizing, setCrystallizing] = useState(false);
   const [cited, setCited] = useState<CitedEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Track which entity ids we've already emitted cites for in this turn so
+  // the fallback scanner doesn't double-fire as more tokens arrive.
+  const firedThisTurnRef = useRef<Set<string>>(new Set());
+
+  // Sort mentionables by name length descending so the scanner matches the
+  // longest possible entity first (e.g. "Dark mode" before "Dark").
+  const mentionIndex = useMemo(() => {
+    const out = mentionables
+      .filter((m) => m.name && m.name.trim().length >= 3)
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        type: m.type,
+        // Escape regex metacharacters in the entity name so user-chosen
+        // labels like "C++" or "Node.js" don't blow up the RegExp.
+        re: new RegExp(
+          `(?<![\\w])${m.name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}(?![\\w])`,
+          "i",
+        ),
+      }));
+    // Longer names first.
+    out.sort((a, b) => b.name.length - a.name.length);
+    return out;
+  }, [mentionables]);
+
+  function scanForMentions(text: string) {
+    if (!mentionIndex.length) return;
+    const fired = firedThisTurnRef.current;
+    for (const m of mentionIndex) {
+      if (fired.has(m.id)) continue;
+      if (!m.re.test(text)) continue;
+      fired.add(m.id);
+      const c: ChatCite = { entity_id: m.id, name: m.name, entity_type: m.type };
+      setCited((prev) => {
+        if (prev.some((p) => p.id === c.entity_id)) return prev;
+        return [
+          ...prev,
+          {
+            id: c.entity_id,
+            name: c.name,
+            type: c.entity_type,
+            key: c.name.toLowerCase().trim(),
+          },
+        ];
+      });
+      onCite(c);
+    }
+  }
 
   const hasAssistantTurn = turns.some(
     (t) => t.role === "assistant" && t.content.trim().length > 0,
@@ -57,6 +116,7 @@ export default function ChatRail({
     setStreaming(true);
     setInput("");
     onDraftChange?.("");
+    firedThisTurnRef.current = new Set();
     try {
       const tid = await ensureThread();
       setTurns((m) => [
@@ -64,8 +124,10 @@ export default function ChatRail({
         { role: "user", content: text },
         { role: "assistant", content: "" },
       ]);
+      let accumulated = "";
       for await (const event of api.chat(text, tid)) {
         if (event.text) {
+          accumulated += event.text;
           setTurns((m) => {
             const out = m.slice();
             const last = out[out.length - 1];
@@ -74,8 +136,14 @@ export default function ChatRail({
             }
             return out;
           });
+          // Fallback: detect entity names in plain streamed text when the LLM
+          // skipped the [[brackets]] format. Genuine cite events from the
+          // server still take precedence because they arrive via event.cite
+          // and fill the same fired set first.
+          scanForMentions(accumulated);
         }
         if (event.cite) {
+          firedThisTurnRef.current.add(event.cite.entity_id);
           const c: ChatCite = event.cite;
           setCited((prev) => {
             if (prev.some((p) => p.id === c.entity_id)) return prev;
@@ -142,6 +210,29 @@ export default function ChatRail({
     return m;
   }, [cited]);
 
+  // Regex that highlights every canonical name as a clickable pill in the
+  // assistant body, whether or not the model remembered to bracket it.
+  const mentionRegex = useMemo(() => {
+    const seen = new Set<string>();
+    const parts: string[] = [];
+    for (const m of mentionIndex) {
+      const key = m.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      parts.push(m.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    }
+    if (!parts.length) return null;
+    return new RegExp(`(?<![\\w])(${parts.join("|")})(?![\\w])`, "gi");
+  }, [mentionIndex]);
+
+  const mentionableByKey = useMemo(() => {
+    const m = new Map<string, MentionableEntity>();
+    mentionIndex.forEach((e) =>
+      m.set(e.name.toLowerCase().trim(), { id: e.id, name: e.name, type: e.type }),
+    );
+    return m;
+  }, [mentionIndex]);
+
   return (
     <aside className="m3-chat-rail">
       <header className="m3-chat-rail__head">
@@ -185,6 +276,8 @@ export default function ChatRail({
             key={i}
             turn={t}
             citedByKey={citedByKey}
+            mentionRegex={mentionRegex}
+            mentionableByKey={mentionableByKey}
             onFocusEntity={onFocusEntity}
           />
         ))}
@@ -269,10 +362,18 @@ export default function ChatRail({
 interface ChatTurnProps {
   turn: Turn;
   citedByKey: Map<string, CitedEntry>;
+  mentionRegex: RegExp | null;
+  mentionableByKey: Map<string, MentionableEntity>;
   onFocusEntity: (entityId: string) => void;
 }
 
-function ChatTurn({ turn, citedByKey, onFocusEntity }: ChatTurnProps) {
+function ChatTurn({
+  turn,
+  citedByKey,
+  mentionRegex,
+  mentionableByKey,
+  onFocusEntity,
+}: ChatTurnProps) {
   if (turn.role === "user") {
     return (
       <div className="m3-turn m3-turn--user">
@@ -282,7 +383,13 @@ function ChatTurn({ turn, citedByKey, onFocusEntity }: ChatTurnProps) {
     );
   }
 
-  const parts = renderWithCites(turn.content, citedByKey, onFocusEntity);
+  const parts = renderWithCites(
+    turn.content,
+    citedByKey,
+    mentionRegex,
+    mentionableByKey,
+    onFocusEntity,
+  );
   return (
     <div className="m3-turn m3-turn--ai">
       <div className="m3-turn__role">M3</div>
@@ -291,33 +398,39 @@ function ChatTurn({ turn, citedByKey, onFocusEntity }: ChatTurnProps) {
   );
 }
 
-// Split an assistant turn's content into text runs and clickable [[Name]] pills.
-// Server emits a parallel cite event with the resolved entity_id; we match back
-// by lowercased name. If the cite hasn't streamed yet, render the raw name so
-// prose stays readable and upgrades in place once it arrives.
+// Split an assistant turn's content into text runs and clickable cite pills.
+// Two passes: strip [[Name]] markers (server-intended format), then scan any
+// remaining text for canonical entity names so plain mentions also upgrade
+// into pills when the model skips the brackets.
 function renderWithCites(
   text: string,
   citedByKey: Map<string, CitedEntry>,
+  mentionRegex: RegExp | null,
+  mentionableByKey: Map<string, MentionableEntity>,
   onFocusEntity: (id: string) => void,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  const re = /\[\[([^\]]+)\]\]/g;
+  let k = 0;
+
+  const bracketRe = /\[\[([^\]]+)\]\]/g;
   let cursor = 0;
   let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = bracketRe.exec(text)) !== null) {
     if (m.index > cursor) {
-      out.push(<span key={`t${k++}`}>{text.slice(cursor, m.index)}</span>);
+      pushWithMentions(out, text.slice(cursor, m.index));
     }
     const name = m[1];
-    const cite = citedByKey.get(name.toLowerCase().trim());
-    if (cite) {
+    const key = name.toLowerCase().trim();
+    const cite = citedByKey.get(key);
+    const mentionable = mentionableByKey.get(key);
+    const resolved = cite ?? mentionable;
+    if (resolved) {
       out.push(
         <button
           key={`c${k++}`}
           className="m3-cite"
-          onClick={() => onFocusEntity(cite.id)}
-          style={{ borderBottomColor: entityColor(cite.type, 0.9) }}
+          onClick={() => onFocusEntity(resolved.id)}
+          style={{ borderBottomColor: entityColor(resolved.type, 0.9) }}
         >
           {name}
         </button>,
@@ -328,7 +441,43 @@ function renderWithCites(
     cursor = m.index + m[0].length;
   }
   if (cursor < text.length) {
-    out.push(<span key={`t${k++}`}>{text.slice(cursor)}</span>);
+    pushWithMentions(out, text.slice(cursor));
   }
   return out;
+
+  function pushWithMentions(dst: React.ReactNode[], chunk: string) {
+    if (!mentionRegex || !chunk) {
+      if (chunk) dst.push(<span key={`t${k++}`}>{chunk}</span>);
+      return;
+    }
+    // RegExp.exec with /g needs lastIndex reset per scan.
+    const local = new RegExp(mentionRegex.source, mentionRegex.flags);
+    let c = 0;
+    let mm: RegExpExecArray | null;
+    while ((mm = local.exec(chunk)) !== null) {
+      if (mm.index > c) {
+        dst.push(<span key={`t${k++}`}>{chunk.slice(c, mm.index)}</span>);
+      }
+      const name = mm[1];
+      const mentionable = mentionableByKey.get(name.toLowerCase().trim());
+      if (mentionable) {
+        dst.push(
+          <button
+            key={`m${k++}`}
+            className="m3-cite"
+            onClick={() => onFocusEntity(mentionable.id)}
+            style={{ borderBottomColor: entityColor(mentionable.type, 0.9) }}
+          >
+            {name}
+          </button>,
+        );
+      } else {
+        dst.push(<span key={`u${k++}`}>{name}</span>);
+      }
+      c = mm.index + mm[0].length;
+    }
+    if (c < chunk.length) {
+      dst.push(<span key={`t${k++}`}>{chunk.slice(c)}</span>);
+    }
+  }
 }

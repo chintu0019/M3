@@ -160,7 +160,12 @@ Available entities:
 
 Rules:
 - Ground your answers in the entity content above. Do not make things up.
-- Cite entities by wrapping their exact canonical name in double brackets: [[Entity Name]].
+- CITE EVERY ENTITY YOU MENTION. Wrap the exact canonical name in double square brackets. This is mandatory, not optional.
+  Correct:   "You set up [[pgvector]] for the [[Kato AI]] project."
+  Incorrect: "You set up pgvector for the Kato AI project."
+  Incorrect: "You set up **pgvector** for the **Kato AI** project."
+- If an entity appears multiple times, cite each occurrence.
+- Only use canonical names that appear in the "Available entities" block above. Do not invent entities.
 - If you don't have enough context to answer, say so honestly.
 - Be concise and direct. No fluff."""
 

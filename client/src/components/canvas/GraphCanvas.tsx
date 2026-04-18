@@ -311,7 +311,10 @@ export default function GraphCanvas(props: GraphCanvasProps) {
   const cam = cameraRef.current;
   const k = cam.k;
   const lodCard = k > 1.4;
-  const lodLabel = k > 0.55;
+  // Labels show much earlier than the prototype's 0.55 — the live graph has
+  // far more nodes than the mocked demo, so the default fit sits around 30-40%
+  // zoom and the user needs at least names to read what's on screen.
+  const lodLabel = k > 0.32;
 
   const hasHL = highlighted && highlighted.size > 0;
 
