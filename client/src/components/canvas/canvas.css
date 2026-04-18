@@ -507,3 +507,27 @@ html:not([data-theme]) {
   opacity: 0.4;
   cursor: default;
 }
+
+/* ---- Self entity + crystallized thread ---- */
+
+.canvas-node__self-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: var(--canvas-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border: 1px solid var(--canvas-accent);
+  color: var(--canvas-accent);
+}
+
+.canvas-node--thread-crystallized {
+  border-style: solid;
+  background: var(--canvas-paper);
+  opacity: 1;
+}
+
+.canvas-node--thread-crystallized .canvas-node__meta {
+  color: var(--canvas-accent);
+}

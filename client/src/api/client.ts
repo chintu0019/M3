@@ -198,6 +198,7 @@ export interface CanvasNodeData {
   status?: string;
   created_at?: string;
   ended_at?: string | null;
+  crystallized_at?: string | null;
 }
 
 export interface CanvasNode {
