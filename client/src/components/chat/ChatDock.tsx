@@ -39,7 +39,7 @@ export default function ChatDock({ onCite, onThreadChanged }: ChatDockProps) {
 
   async function send() {
     const text = input.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || crystallizing) return;
     // Flip streaming and clear input synchronously so a fast second click
     // can't race through ensureThread() and create a duplicate thread.
     setStreaming(true);
@@ -163,10 +163,15 @@ export default function ChatDock({ onCite, onThreadChanged }: ChatDockProps) {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={streaming ? "Streaming…" : "Ask something…"}
-          disabled={streaming}
+          placeholder={
+            crystallizing ? "Saving…" : streaming ? "Streaming…" : "Ask something…"
+          }
+          disabled={streaming || crystallizing}
         />
-        <button type="submit" disabled={streaming || !input.trim()}>
+        <button
+          type="submit"
+          disabled={streaming || crystallizing || !input.trim()}
+        >
           Send
         </button>
       </form>
