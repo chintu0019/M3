@@ -295,6 +295,24 @@ export default function Settings() {
   const [message, setMessage] = useState<{ text: string; type: "ok" | "err" } | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [selfContextEnabled, setSelfContextEnabled] = useState(true);
+
+  useEffect(() => {
+    api.settings
+      .getSelfContext()
+      .then((s) => setSelfContextEnabled(s.enabled))
+      .catch(() => {});
+  }, []);
+
+  const updateSelfContext = async (enabled: boolean) => {
+    setSelfContextEnabled(enabled);
+    try {
+      await api.settings.setSelfContext(enabled);
+    } catch (err) {
+      console.error("failed to update self-context", err);
+      setSelfContextEnabled(!enabled); // revert
+    }
+  };
 
   const flash = (text: string, type: "ok" | "err" = "ok") => {
     setMessage({ text, type });
@@ -495,6 +513,23 @@ export default function Settings() {
           )}
         </div>
       )}
+
+      {/* Self-knowledge in chat */}
+      <div className="bg-m3-surface border border-m3-border rounded-xl p-6 mb-6">
+        <h2 className="text-lg font-semibold mb-2">Self-knowledge in chat</h2>
+        <p className="text-sm text-m3-muted mb-4">
+          When on, chat includes what M3 has learned about you so it can answer with your context.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={selfContextEnabled}
+            onChange={(e) => updateSelfContext(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <span className="text-sm">{selfContextEnabled ? "Enabled" : "Disabled"}</span>
+        </label>
+      </div>
 
       {/* About */}
       <div className="bg-m3-surface border border-m3-border rounded-xl p-6">
