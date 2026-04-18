@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type LLMSettings, type ProviderInfo } from "../api/client";
+import { THEMES, useTheme } from "../hooks/useTheme";
 
 // --- Presets for quick-adding popular providers ---
 
@@ -296,6 +297,7 @@ export default function Settings() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [selfContextEnabled, setSelfContextEnabled] = useState(true);
+  const { theme, setTheme } = useTheme();
 
   useEffect(() => {
     api.settings
@@ -513,6 +515,34 @@ export default function Settings() {
           )}
         </div>
       )}
+
+      {/* Theme */}
+      <div className="bg-m3-surface border border-m3-border rounded-xl p-6 mb-6">
+        <h2 className="text-lg font-semibold mb-2">Theme</h2>
+        <p className="text-sm text-m3-muted mb-4">
+          Pick the visual aesthetic. Applies instantly across the app.
+        </p>
+        <div className="flex gap-3">
+          {THEMES.map((t) => (
+            <label
+              key={t}
+              className={`px-4 py-2 border rounded-lg cursor-pointer ${
+                theme === t ? "border-m3-accent text-m3-accent" : "border-m3-border text-m3-text"
+              }`}
+            >
+              <input
+                type="radio"
+                className="sr-only"
+                name="theme"
+                value={t}
+                checked={theme === t}
+                onChange={() => void setTheme(t)}
+              />
+              {t}
+            </label>
+          ))}
+        </div>
+      </div>
 
       {/* Self-knowledge in chat */}
       <div className="bg-m3-surface border border-m3-border rounded-xl p-6 mb-6">
