@@ -16,7 +16,11 @@ export default function ChatDock({ onCite, onThreadChanged }: ChatDockProps) {
   const [messages, setMessages] = useState<LiveTurn[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [crystallizing, setCrystallizing] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const hasAssistantTurn = messages.some(
+    (m) => m.role === "assistant" && m.content.trim().length > 0,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -74,15 +78,34 @@ export default function ChatDock({ onCite, onThreadChanged }: ChatDockProps) {
   }
 
   async function endThread() {
-    if (!threadId) return;
+    if (!threadId || crystallizing) return;
+    setCrystallizing(true);
     try {
-      await api.threads.end(threadId);
-    } catch (err) {
-      console.error("end thread failed", err);
+      if (hasAssistantTurn) {
+        try {
+          await api.threads.crystallize(threadId);
+        } catch (err) {
+          // Already-crystallized (409) or no assistant turn (400) — fall back to plain end.
+          console.warn("crystallize failed, falling back to end", err);
+          try {
+            await api.threads.end(threadId);
+          } catch (err2) {
+            console.error("end thread failed", err2);
+          }
+        }
+      } else {
+        try {
+          await api.threads.end(threadId);
+        } catch (err) {
+          console.error("end thread failed", err);
+        }
+      }
+    } finally {
+      setCrystallizing(false);
+      setThreadId(null);
+      setMessages([]);
+      onThreadChanged(null);
     }
-    setThreadId(null);
-    setMessages([]);
-    onThreadChanged(null);
   }
 
   if (collapsed) {
@@ -108,9 +131,9 @@ export default function ChatDock({ onCite, onThreadChanged }: ChatDockProps) {
             <button
               className="chat-dock__end"
               onClick={endThread}
-              disabled={streaming}
+              disabled={streaming || crystallizing}
             >
-              End
+              {crystallizing ? "Saving…" : hasAssistantTurn ? "End & Save" : "End"}
             </button>
           )}
           <button
