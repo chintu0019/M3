@@ -193,7 +193,7 @@ class Ingester:
                 ), created_date=today)
 
             # 6. Vector index upserts
-            await self._index_vectors(inp.item_id, inp.text, entities_touched)
+            await self._index_item(inp.item_id, inp.text, parsed, entities_touched)
 
             # 7. Commit
             summary = parsed.interpretation.what_happened[:120] or f"{parsed.kind} item"
@@ -225,17 +225,40 @@ class Ingester:
         # P2 will replace this with a real top-K lookup against VectorIndex.nearest_entities.
         return "(no candidate entities yet)"
 
-    async def _index_vectors(self, item_id: uuid.UUID, text: str, entities_touched: list[str]) -> None:
-        idx = VectorIndex.open(self.brain_root)
+    async def _index_item(self, item_id: uuid.UUID, text: str, parsed: ExtractionOutput, entities_touched: list[str]) -> None:
+        from m3.brain.fts import FTSIndex
+        from m3.brain.hooks import HookIndex
+
+        if text.strip():
+            vec = (await self.embedder.embed([text]))[0]
+            vidx = VectorIndex.open(self.brain_root)
+            try:
+                vidx.upsert_item(item_id=str(item_id), embedding=vec)
+                for name in entities_touched:
+                    evec = (await self.embedder.embed([name]))[0]
+                    vidx.upsert_entity(slug=entity_doc.slugify(name), embedding=evec)
+            finally:
+                vidx.close()
+
+        if text.strip():
+            fidx = FTSIndex.open(self.brain_root)
+            try:
+                fidx.upsert_item(item_id=str(item_id), text=text)
+            finally:
+                fidx.close()
+
+        hidx = HookIndex.open(self.brain_root)
         try:
-            if text.strip():
-                vec = (await self.embedder.embed([text]))[0]
-                idx.upsert_item(item_id=str(item_id), embedding=vec)
-            for name in entities_touched:
-                evec = (await self.embedder.embed([name]))[0]
-                idx.upsert_entity(slug=entity_doc.slugify(name), embedding=evec)
+            hidx.upsert_item_hooks(
+                item_id=str(item_id),
+                who=[ref.name for ref in parsed.hooks.who],
+                what=[ref.name for ref in parsed.hooks.what],
+                where=[ref.name for ref in parsed.hooks.where],
+                project=list(parsed.hooks.project or []),
+                stance_entities=[s.entity_name for s in parsed.hooks.stance],
+            )
         finally:
-            idx.close()
+            hidx.close()
 
 
 def _apply_section_op(body: str, operation: str, new_content: str, heading: str | None) -> str:

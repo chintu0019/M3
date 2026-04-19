@@ -160,3 +160,35 @@ async def test_ingest_rolls_back_on_failure(ingester, fake_llm, tmp_brain: Path)
         ["git", "status", "--porcelain"], cwd=tmp_brain, check=True, capture_output=True, text=True,
     ).stdout
     assert status == "", f"expected clean tree, got: {status!r}"
+
+
+@pytest.mark.asyncio
+async def test_ingest_populates_fts_and_hook_indexes(ingester, fake_llm, tmp_brain: Path):
+    import uuid as _uuid
+    item_id = _uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    fake_llm.set_response("coffee with Aditya", {
+        "kind": "personal",
+        "interpretation": {"what_happened": "coffee catchup",
+                           "when": {"iso": "2026-04-19", "source": "ingest_time"}, "confidence": 0.9},
+        "open_questions": [],
+        "hooks": {
+            "who": [{"name": "Aditya"}], "what": [{"name": "Pacific"}], "where": [],
+            "when": "2026-04-19", "source": "cli", "project": [],
+            "stance": [],
+        },
+        "self_updates": [], "entity_updates": [],
+    })
+    await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text", text="coffee with Aditya about Pacific",
+    ))
+    from m3.brain.fts import FTSIndex
+    from m3.brain.hooks import HookIndex
+    fts = FTSIndex.open(tmp_brain)
+    hits = fts.search("Pacific", k=5)
+    assert [h.id for h in hits] == [str(item_id)]
+    fts.close()
+    h_idx = HookIndex.open(tmp_brain)
+    hook_hits = h_idx.search("aditya", types=["who"], k=5)
+    assert [h.item_id for h in hook_hits] == [str(item_id)]
+    h_idx.close()
