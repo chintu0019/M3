@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -32,6 +31,20 @@ def sample_item_id() -> uuid.UUID:
     return uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
+_DEFAULT_FAKE_RESPONSE: dict[str, Any] = {
+    "kind": "personal",
+    "interpretation": {
+        "what_happened": "",
+        "when": {"iso": None, "source": "unknown"},
+        "confidence": 0.0,
+    },
+    "open_questions": [],
+    "hooks": {},
+    "self_updates": [],
+    "entity_updates": [],
+}
+
+
 class FakeLLM:
     """Returns canned tool-use responses keyed on the text content."""
 
@@ -42,15 +55,26 @@ class FakeLLM:
     def set_response(self, key: str, response: dict[str, Any]) -> None:
         self._canned[key] = response
 
-    async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
+    async def complete_tool(
+        self,
+        messages,
+        tools,
+        system=None,
+        tool_choice=None,
+        max_tokens=4096,
+        temperature=0.2,
+    ):
         from m3.core.llm.base import ToolResult
 
         self.calls.append({"messages": messages, "system": system, "tool_choice": tool_choice})
         user_text = messages[-1]["content"] if isinstance(messages[-1]["content"], str) else ""
         for key, resp in self._canned.items():
             if key in user_text:
-                return ToolResult(tool_name=tool_choice, input=resp)
-        return ToolResult(tool_name=tool_choice, input={"kind": "personal", "interpretation": {"what_happened": "", "when": {"iso": None, "source": "unknown"}, "confidence": 0.0}, "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": []})
+                return ToolResult(tool_name=tool_choice or "process_item", input=resp)
+        return ToolResult(
+            tool_name=tool_choice or "process_item",
+            input=_DEFAULT_FAKE_RESPONSE,
+        )
 
     supports_tools = True
     supports_vision = False
