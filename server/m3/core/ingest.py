@@ -13,6 +13,7 @@ Sequence:
 from __future__ import annotations
 
 import logging
+import subprocess
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -77,113 +78,146 @@ class Ingester:
         now_iso = datetime.now(timezone.utc).isoformat()
         today = now_iso[:10]
 
-        if inp.original_bytes is not None:
-            ext = (inp.original_filename or "bin").rsplit(".", 1)[-1] or "bin"
-            items_mod.write_item(self.brain_root, inp.item_id, extension=ext, content=inp.original_bytes)
+        try:
+            # Everything from here through commit_ingest touches the brain tree.
+            # If any step fails we roll back via `git reset --hard HEAD && git clean -fd`
+            # so the tree is indistinguishable from its pre-ingest state. That includes
+            # the originally-written bytes — so keep the write inside the try.
+            if inp.original_bytes is not None:
+                ext = (inp.original_filename or "bin").rsplit(".", 1)[-1] or "bin"
+                items_mod.write_item(self.brain_root, inp.item_id, extension=ext, content=inp.original_bytes)
 
-        candidates_block = await self._candidate_entities_prompt_block(inp.text)
-        self_doc_text = (self.brain_root / "self.md").read_text()
-        system = build_system_prompt(today_iso=today, self_doc=self_doc_text, candidate_entities_block=candidates_block)
+            candidates_block = await self._candidate_entities_prompt_block(inp.text)
+            self_doc_text = (self.brain_root / "self.md").read_text()
+            system = build_system_prompt(today_iso=today, self_doc=self_doc_text, candidate_entities_block=candidates_block)
 
-        user_notes_block = f"\n\nUser notes: {inp.user_notes}" if inp.user_notes else ""
-        user_msg = (
-            f"Item id: {item_id_str}\nSource: {inp.source}\nContent type: {inp.content_type}\n"
-            f"Ingested at: {now_iso}\n\n---\n{inp.text}\n---{user_notes_block}"
-        )
-
-        tool = Tool(
-            name="process_item",
-            description="Emit M3's structured extraction for this item.",
-            input_schema=process_item_tool_schema(),
-        )
-        result = await self.llm.complete_tool(
-            messages=[{"role": "user", "content": user_msg}],
-            tools=[tool], system=system, tool_choice="process_item",
-            max_tokens=8192, temperature=0.2,
-        )
-        parsed = ExtractionOutput.model_validate(result.input or {})
-
-        # 1. Meta
-        items_mod.write_meta(self.brain_root, items_mod.ItemMeta(
-            id=inp.item_id, kind=parsed.kind, source=inp.source, created_at=now_iso,
-            original_filename=inp.original_filename, extracted_text=inp.text,
-            when_iso=parsed.interpretation.when.iso, when_source=parsed.interpretation.when.source,
-            hooks=parsed.hooks.model_dump(), llm_output_raw=parsed.model_dump(),
-            confidence=parsed.interpretation.confidence,
-        ))
-
-        # 2. Self updates
-        self_touched: list[str] = []
-        for su in parsed.self_updates:
-            self_doc.apply_update(
-                self.brain_root, slot=su.slot, operation=su.operation,
-                new_content=su.new_content, heading=su.section_heading,
-            )
-            self_touched.append(su.slot)
-            changelog.append(
-                self.brain_root, timestamp=now_iso,
-                target=f"self.md#{su.slot}", summary=su.change_summary,
+            user_notes_block = f"\n\nUser notes: {inp.user_notes}" if inp.user_notes else ""
+            user_msg = (
+                f"Item id: {item_id_str}\nSource: {inp.source}\nContent type: {inp.content_type}\n"
+                f"Ingested at: {now_iso}\n\n---\n{inp.text}\n---{user_notes_block}"
             )
 
-        # 3. Entity updates
-        entities_touched: list[str] = []
-        for eu in parsed.entity_updates:
-            existing = entity_doc.load(self.brain_root, slug=entity_doc.slugify(eu.canonical_name))
-            related_slugs = [entity_doc.slugify(n) for n in (eu.related_entity_names or [])]
-            new_body = existing.body if existing else ""
-            if eu.section_update:
-                new_body = _apply_section_op(new_body, eu.section_update.operation,
-                                             eu.section_update.new_content, eu.section_update.section_heading)
-            doc = entity_doc.EntityDoc(
-                canonical_name=eu.canonical_name, entity_type=eu.entity_type,
-                aliases=list(eu.merge_aliases or []), description=None,
-                related=related_slugs,
-                signal_mentions=(existing.signal_mentions if existing else 0),
-                summary_external=eu.summary_external, body=new_body,
+            tool = Tool(
+                name="process_item",
+                description="Emit M3's structured extraction for this item.",
+                input_schema=process_item_tool_schema(),
             )
-            entity_doc.upsert(self.brain_root, doc)
-            entities_touched.append(doc.canonical_name)
-            if eu.section_update:
+            result = await self.llm.complete_tool(
+                messages=[{"role": "user", "content": user_msg}],
+                tools=[tool], system=system, tool_choice="process_item",
+                max_tokens=8192, temperature=0.2,
+            )
+            parsed = ExtractionOutput.model_validate(result.input or {})
+
+            # 1. Meta
+            items_mod.write_meta(self.brain_root, items_mod.ItemMeta(
+                id=inp.item_id, kind=parsed.kind, source=inp.source, created_at=now_iso,
+                original_filename=inp.original_filename, extracted_text=inp.text,
+                when_iso=parsed.interpretation.when.iso, when_source=parsed.interpretation.when.source,
+                hooks=parsed.hooks.model_dump(), llm_output_raw=parsed.model_dump(),
+                confidence=parsed.interpretation.confidence,
+            ))
+
+            # 2. Self updates
+            self_touched: list[str] = []
+            for su in parsed.self_updates:
+                self_doc.apply_update(
+                    self.brain_root, slot=su.slot, operation=su.operation,
+                    new_content=su.new_content, heading=su.section_heading,
+                )
+                self_touched.append(su.slot)
                 changelog.append(
                     self.brain_root, timestamp=now_iso,
-                    target=f"entities/{entity_doc.slugify(doc.canonical_name)}.md",
-                    summary=eu.section_update.change_summary,
+                    target=f"self.md#{su.slot}", summary=su.change_summary,
                 )
 
-        # 4. Record / signal routing
-        if parsed.kind == "record" and parsed.structured_fields is not None:
-            sf = parsed.structured_fields
-            records_mod.write_record(self.brain_root, records_mod.Record(
-                item_id=inp.item_id, amount=sf.amount, currency=sf.currency, vendor=sf.vendor,
-                date=sf.date, category=sf.category, due_date=sf.due_date, reference_id=sf.reference_id,
-            ))
-        if parsed.kind == "signal" and parsed.signal is not None:
-            sig = parsed.signal
-            signals_mod.append_signal(self.brain_root, signals_mod.Signal(
-                item_id=inp.item_id, date=parsed.interpretation.when.iso or today,
-                topic_entities=list(sig.topic_entities), one_line_takeaway=sig.one_line_takeaway,
-            ))
-            for name in sig.topic_entities:
-                signals_mod.bump_mention_count(self.brain_root, canonical_name=name)
+            # 3. Entity updates
+            entities_touched: list[str] = []
+            for eu in parsed.entity_updates:
+                # Resolve the slug we're updating. match_existing_id carries a slug
+                # from the candidate-entities block (P2 will make this richer).
+                # If the LLM emits a rename (match_existing_slug != slug(canonical_name)),
+                # consolidate() renames the file and folds in aliases.
+                match_slug = eu.match_existing_id
+                target_slug = match_slug or entity_doc.slugify(eu.canonical_name)
+                existing = entity_doc.load(self.brain_root, slug=target_slug)
+                related_slugs = [entity_doc.slugify(n) for n in (eu.related_entity_names or [])]
+                new_body = existing.body if existing else ""
+                if eu.section_update:
+                    new_body = _apply_section_op(new_body, eu.section_update.operation,
+                                                 eu.section_update.new_content, eu.section_update.section_heading)
+                entity_doc.consolidate(
+                    self.brain_root,
+                    canonical_name=eu.canonical_name,
+                    entity_type=eu.entity_type,
+                    merge_aliases=list(eu.merge_aliases or []),
+                    description=None,
+                    related=related_slugs,
+                    summary_external=eu.summary_external,
+                    body=new_body,
+                    match_existing_slug=match_slug,
+                )
+                entities_touched.append(eu.canonical_name)
+                if eu.section_update:
+                    changelog.append(
+                        self.brain_root, timestamp=now_iso,
+                        target=f"entities/{entity_doc.slugify(eu.canonical_name)}.md",
+                        summary=eu.section_update.change_summary,
+                    )
 
-        # 5. Open questions
-        for oq in parsed.open_questions:
-            questions.append(self.brain_root, questions.OpenQuestion(
-                item_id=inp.item_id, question=oq.question, context_snippet=oq.context_snippet,
-            ), created_date=today)
+            # 4. Record / signal routing
+            if parsed.kind == "record" and parsed.structured_fields is not None:
+                sf = parsed.structured_fields
+                records_mod.write_record(self.brain_root, records_mod.Record(
+                    item_id=inp.item_id, amount=sf.amount, currency=sf.currency, vendor=sf.vendor,
+                    date=sf.date, category=sf.category, due_date=sf.due_date, reference_id=sf.reference_id,
+                ))
+            if parsed.kind == "signal" and parsed.signal is not None:
+                sig = parsed.signal
+                signals_mod.append_signal(self.brain_root, signals_mod.Signal(
+                    item_id=inp.item_id, date=parsed.interpretation.when.iso or today,
+                    topic_entities=list(sig.topic_entities), one_line_takeaway=sig.one_line_takeaway,
+                ))
+                for name in sig.topic_entities:
+                    signals_mod.bump_mention_count(
+                        self.brain_root,
+                        canonical_name=name,
+                        takeaway=sig.one_line_takeaway or None,
+                        date=parsed.interpretation.when.iso or today,
+                    )
 
-        # 6. Vector index upserts
-        await self._index_vectors(inp.item_id, inp.text, entities_touched)
+            # 5. Open questions
+            for oq in parsed.open_questions:
+                questions.append(self.brain_root, questions.OpenQuestion(
+                    item_id=inp.item_id, question=oq.question, context_snippet=oq.context_snippet,
+                ), created_date=today)
 
-        # 7. Commit
-        summary = parsed.interpretation.what_happened[:120] or f"{parsed.kind} item"
-        commit_ingest(self.brain_root, item_id=item_id_str, summary=summary)
+            # 6. Vector index upserts
+            await self._index_vectors(inp.item_id, inp.text, entities_touched)
 
-        return IngestOutput(
-            item_id=inp.item_id, kind=parsed.kind, confidence=parsed.interpretation.confidence,
-            self_touched=self_touched, entities_touched=entities_touched,
-            questions_raised=len(parsed.open_questions),
-        )
+            # 7. Commit
+            summary = parsed.interpretation.what_happened[:120] or f"{parsed.kind} item"
+            commit_ingest(self.brain_root, item_id=item_id_str, summary=summary)
+
+            return IngestOutput(
+                item_id=inp.item_id, kind=parsed.kind, confidence=parsed.interpretation.confidence,
+                self_touched=self_touched, entities_touched=entities_touched,
+                questions_raised=len(parsed.open_questions),
+            )
+        except Exception:
+            # Reset to the last committed state so a partial ingest leaves nothing
+            # behind — no orphan originals, no half-written metas, no stray entity
+            # files. Relies on init_brain's baseline commit for first-run brains.
+            self._rollback()
+            raise
+
+    def _rollback(self) -> None:
+        try:
+            subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=self.brain_root, check=True)
+            subprocess.run(["git", "clean", "-fd"], cwd=self.brain_root, check=True)
+        except subprocess.CalledProcessError:
+            # We're already in an error handler; let the original exception propagate.
+            logger.exception("git rollback failed; brain tree may be dirty")
 
     async def _candidate_entities_prompt_block(self, text: str) -> str:
         # P1 stub: we don't yet have enough entities for similarity retrieval to be meaningful.

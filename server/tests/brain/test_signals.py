@@ -1,3 +1,4 @@
+import json
 import uuid
 from pathlib import Path
 
@@ -32,10 +33,29 @@ def test_bump_mention_count_increments_entity_counter(tmp_brain: Path):
     loaded = load(tmp_brain, slug="anthropic")
     assert loaded is not None and loaded.signal_mentions == 2
 
+    # JSON counter also tracks the mentions alongside the entity frontmatter.
+    data = json.loads((tmp_brain / "index" / "signal_mentions.json").read_text())
+    assert data["mentions"]["Anthropic"]["count"] == 2
 
-def test_bump_mention_count_creates_stub_when_missing(tmp_brain: Path):
+
+def test_bump_mention_count_does_not_create_entity_when_missing(tmp_brain: Path):
     bump_mention_count(tmp_brain, canonical_name="Mixpanel")
-    loaded = load(tmp_brain, slug="mixpanel")
-    assert loaded is not None
-    assert loaded.signal_mentions == 1
-    assert loaded.entity_type == "topic"
+    # No entity page must be spawned — news/signal ingests never create stubs.
+    assert (tmp_brain / "entities" / "mixpanel.md").exists() is False
+    # The JSON counter records the mention.
+    data = json.loads((tmp_brain / "index" / "signal_mentions.json").read_text())
+    assert data["mentions"]["Mixpanel"]["count"] == 1
+
+
+def test_bump_mention_count_captures_takeaway_and_date(tmp_brain: Path):
+    bump_mention_count(
+        tmp_brain,
+        canonical_name="Mixpanel",
+        takeaway="Launched a new pricing tier.",
+        date="2026-04-19",
+    )
+    data = json.loads((tmp_brain / "index" / "signal_mentions.json").read_text())
+    entry = data["mentions"]["Mixpanel"]
+    assert entry["count"] == 1
+    assert entry["last_seen"] == "2026-04-19"
+    assert entry["takeaways"] == ["Launched a new pricing tier."]

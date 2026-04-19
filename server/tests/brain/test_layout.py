@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,16 @@ def test_is_initialized_detects_uninitialized_dir(tmp_path: Path):
 def test_is_initialized_detects_initialized_dir(tmp_path: Path):
     init_brain(tmp_path)
     assert is_initialized(tmp_path) is True
+
+
+def test_init_brain_creates_baseline_commit(tmp_path: Path):
+    """Fresh init must leave a HEAD commit so post-ingest rollbacks have a target."""
+    init_brain(tmp_path)
+    # `git rev-parse HEAD` returns non-zero (128) on an unborn branch, and 0 once
+    # a commit exists. Before the fix this failed with 128.
+    subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True,
+    )
 
 
 def test_brain_paths_resolves_all_locations(tmp_path: Path):

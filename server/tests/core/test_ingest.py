@@ -104,7 +104,9 @@ async def test_record_item_writes_records_json_not_narrative(ingester, fake_llm,
 @pytest.mark.asyncio
 async def test_ingest_commits_to_git(ingester, fake_llm, tmp_brain: Path):
     import subprocess
-    subprocess.run(["git", "add", "-A"], cwd=tmp_brain, check=True)
+    # init_brain now writes a baseline commit; an extra --allow-empty commit
+    # keeps this test's "look for a message that starts with ingest <id>" assertion
+    # robust even if skeleton-init gets its own commit message later.
     subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "baseline"], cwd=tmp_brain, check=True)
     item_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
     fake_llm.set_response("burnout", {
@@ -124,3 +126,37 @@ async def test_ingest_commits_to_git(ingester, fake_llm, tmp_brain: Path):
         ["git", "log", "-1", "--pretty=%s"], cwd=tmp_brain, check=True, capture_output=True, text=True,
     ).stdout.strip()
     assert msg.startswith(f"ingest {item_id}:")
+
+
+@pytest.mark.asyncio
+async def test_ingest_rolls_back_on_failure(ingester, fake_llm, tmp_brain: Path):
+    """A malformed LLM payload must not leave half-written files in the brain."""
+    import subprocess
+
+    item_id = uuid.UUID("aaaaaaaa-cccc-bbbb-dddd-eeeeeeeeeeee")
+    # `kind="weirdo"` is not a valid Kind; Pydantic validation should raise.
+    fake_llm.set_response("rollback test", {
+        "kind": "weirdo",
+        "interpretation": {
+            "what_happened": "", "when": {"iso": None, "source": "unknown"}, "confidence": 0.0,
+        },
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+    })
+    with pytest.raises(Exception):
+        await ingester.ingest(IngestInput(
+            item_id=item_id, source="cli",
+            original_bytes=b"some bytes", original_filename="rollback test.txt",
+            content_type="text", text="rollback test",
+        ))
+
+    # No new files should remain in items/meta or items/originals (.gitkeep is ok).
+    meta_entries = [p.name for p in (tmp_brain / "items" / "meta").iterdir()]
+    orig_entries = [p.name for p in (tmp_brain / "items" / "originals").iterdir()]
+    assert meta_entries == [".gitkeep"] or meta_entries == []
+    assert orig_entries == [".gitkeep"] or orig_entries == []
+
+    # Working tree must be clean (nothing uncommitted, nothing untracked).
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=tmp_brain, check=True, capture_output=True, text=True,
+    ).stdout
+    assert status == "", f"expected clean tree, got: {status!r}"

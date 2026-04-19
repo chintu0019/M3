@@ -61,12 +61,28 @@ def init_brain(root: Path) -> BrainPaths:
     p = BrainPaths(root)
     for d in (p.entities_dir, p.items_originals, p.items_meta, p.records_dir, p.signals_dir, p.index_dir):
         d.mkdir(parents=True, exist_ok=True)
+        # Empty directories aren't tracked by git, which means `git clean -fd` on
+        # rollback would delete them. A .gitkeep keeps the skeleton intact across
+        # resets even if ingests leave no files behind.
+        keep = d / ".gitkeep"
+        if not keep.exists():
+            keep.write_text("")
     if not p.self_md.exists():
         p.self_md.write_text(_FRESH_SELF_MD)
     if not p.open_questions.exists():
         p.open_questions.write_text(_FRESH_OPEN_QUESTIONS)
     if not p.changelog.exists():
         p.changelog.write_text(_FRESH_CHANGELOG)
+    freshly_inited_git = False
     if not (root / ".git").is_dir():
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        freshly_inited_git = True
+    if freshly_inited_git:
+        # Every brain needs a baseline commit so that post-ingest `git reset --hard HEAD`
+        # has a real target to reset to on rollback. Skip if the repo already had history.
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "initial brain skeleton"],
+            cwd=root, check=True,
+        )
     return p
