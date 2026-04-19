@@ -1,25 +1,18 @@
 """Multi-signal retrieval ranker.
 
 Combines three signals:
-- Keyword (FTS5 bm25 score, already normalized 0-1 per hit by FTSIndex via
-  `1 / (1 + raw_bm25)`)
+- Keyword (FTS5 bm25, per-query max-normalized to 0-1)
 - Hook match (one point per matched hook across types, capped at 3)
 - Embedding cosine (1.0 - distance, clipped to 0-1)
 
-Final score = W_KEYWORD * keyword + W_HOOK * hook_hits + W_EMBED * embed.
-Default weights: keyword=0.5, hook=0.6, embed=0.2.
+Final score = W_KEYWORD * keyword_norm + W_HOOK * hook_hits + W_EMBED * embed.
+Default weights: keyword=0.5, hook=0.3, embed=0.2.
 
-Hook matches weigh more than keyword matches because a hook hit is already a
-structured signal (the LLM explicitly called this value out at ingest time),
-while a raw keyword hit is just lexical coincidence. An item that matched via
-hook should outrank one that matched only by substring.
-
-Embeddings only re-rank items that already matched a lexical or hook signal;
-they don't add net-new candidates. This keeps a fake/constant embedder
-(common in tests, possible in cold-start production) from dragging in every
-item in the store.
-
-Returns top-K RetrievalHits with item metadata + human-readable reasons.
+Keyword hits carry the most weight because the user's raw query was a lexical
+signal; hook hits add structured-signal confirmation on top; embeddings pull
+in semantically-related items the user phrased differently from the stored
+text. Semantic similarity has a conservative threshold (0.35) so fake or
+noisy embedders can't drag in every item.
 """
 
 from __future__ import annotations
@@ -37,8 +30,9 @@ from m3.brain.vectors import VectorIndex
 HOOK_TYPES = ["who", "what", "where", "project", "stance_entity"]
 
 W_KEYWORD = 0.5
-W_HOOK = 0.6
+W_HOOK = 0.3
 W_EMBED = 0.2
+EMBED_SIM_THRESHOLD = 0.35
 
 
 class _Embedder(Protocol):
@@ -61,7 +55,14 @@ class Retriever:
         self.brain_root = brain_root
         self.embedder = embedder
 
-    async def search(self, query: str, *, k: int = 10) -> list[RetrievalHit]:
+    async def search(
+        self,
+        query: str,
+        *,
+        k: int = 10,
+        since_iso: str | None = None,
+        until_iso: str | None = None,
+    ) -> list[RetrievalHit]:
         q = (query or "").strip()
         if not q:
             return []
@@ -74,11 +75,17 @@ class Retriever:
         reasons: dict[str, list[str]] = {}
         snippets: dict[str, str] = {}
 
+        # Per-query max-normalize FTS scores to 0-1 so W_KEYWORD composes
+        # predictably with hook/embed weights regardless of absolute bm25
+        # magnitude (which depends on corpus length and term frequencies).
+        max_fts = max((h.score for h in fts_hits), default=0.0)
         for fh in fts_hits:
-            scores[fh.id] = scores.get(fh.id, 0.0) + W_KEYWORD * fh.score
-            reasons.setdefault(fh.id, []).append(
-                f"keyword match (score {fh.score:.2f})"
-            )
+            if max_fts > 0:
+                norm = fh.score / max_fts
+                scores[fh.id] = scores.get(fh.id, 0.0) + W_KEYWORD * norm
+                reasons.setdefault(fh.id, []).append(
+                    f"keyword match (score {norm:.2f})"
+                )
             if fh.snippet:
                 snippets[fh.id] = fh.snippet
 
@@ -95,22 +102,20 @@ class Retriever:
                 "matched hooks: " + ", ".join(sorted(hook_types_seen[iid]))
             )
 
-        # Embeddings only re-rank items that already matched a lexical/hook
-        # signal. Semantic similarity on its own is too noisy to surface
-        # candidates on — e.g. a constant-vector fake embedder would drag in
-        # every item in the store.
+        # Embeddings add net-new candidates above a conservative similarity
+        # threshold. The threshold keeps noise (fake/constant embedders, weak
+        # semantic matches) out while letting genuine paraphrase/synonym hits
+        # through.
         for vh in vec_hits:
-            if vh.id not in scores:
-                continue
             sim = max(0.0, 1.0 - vh.distance)
-            if sim <= 0.0:
+            if sim < EMBED_SIM_THRESHOLD:
                 continue
-            scores[vh.id] += W_EMBED * sim
+            scores[vh.id] = scores.get(vh.id, 0.0) + W_EMBED * sim
             reasons.setdefault(vh.id, []).append(
                 f"semantic similarity ({sim:.2f})"
             )
 
-        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         results: list[RetrievalHit] = []
         for item_id, score in ranked:
             try:
@@ -118,6 +123,8 @@ class Retriever:
             except (ValueError, TypeError):
                 meta = None
             if meta is None:
+                continue
+            if not _passes_time(meta.when_iso, since_iso, until_iso):
                 continue
             excerpt = (meta.extracted_text or "")[:200]
             results.append(
@@ -131,6 +138,8 @@ class Retriever:
                     reasons=reasons.get(item_id, []),
                 )
             )
+            if len(results) >= k:
+                break
         return results
 
     def _gather(self, q: str):
@@ -152,3 +161,20 @@ class Retriever:
             return vec.nearest_items(query=qvec, k=k)
         finally:
             vec.close()
+
+
+def _passes_time(
+    when_iso: str | None, since_iso: str | None, until_iso: str | None
+) -> bool:
+    """Filter by when_iso window. Items without when_iso are excluded when
+    any filter is set (can't know if they fall inside) and included when no
+    filter is set."""
+    if since_iso is None and until_iso is None:
+        return True
+    if not when_iso:
+        return False
+    if since_iso and when_iso < since_iso:
+        return False
+    if until_iso and when_iso > until_iso:
+        return False
+    return True

@@ -10,8 +10,22 @@ from m3.brain.reindex import reindex_all
 
 
 class _Embedder:
+    """Deterministic per-text hash embedder (see tests/core/test_retrieve.py)."""
+
     dim = 768
-    async def embed(self, texts): return [[0.0] * 768 for _ in texts]
+
+    async def embed(self, texts):
+        import hashlib
+
+        out = []
+        for t in texts:
+            seed = hashlib.sha256(t.encode()).digest()
+            vec: list[float] = []
+            while len(vec) < 768:
+                seed = hashlib.sha256(seed).digest()
+                vec.extend(b / 255.0 for b in seed)
+            out.append(vec[:768])
+        return out
 
 
 @pytest.mark.asyncio

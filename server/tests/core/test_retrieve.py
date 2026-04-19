@@ -41,10 +41,24 @@ def _write_item(tmp_brain: Path, item_id: str, text: str, who: list[str], when_i
 
 
 class _Embedder:
+    """Deterministic per-text hash embedder. Different inputs → different
+    vectors, so cosine distance is meaningful and the 0.35 similarity
+    threshold in the retriever doesn't drag every item into every query."""
+
     dim = 768
 
     async def embed(self, texts):
-        return [[0.1] * 768 for _ in texts]
+        import hashlib
+
+        out = []
+        for t in texts:
+            seed = hashlib.sha256(t.encode()).digest()
+            vec: list[float] = []
+            while len(vec) < 768:
+                seed = hashlib.sha256(seed).digest()
+                vec.extend(b / 255.0 for b in seed)
+            out.append(vec[:768])
+        return out
 
 
 @pytest.mark.asyncio
@@ -76,7 +90,7 @@ async def test_ranking_combines_signals(tmp_brain: Path):
     _write_item(
         tmp_brain,
         "00000000-0000-0000-0000-00000000aaaa",
-        "About the Pacific project.",
+        "About Aditya and the Pacific project.",
         ["Aditya"],
         "2026-04-19",
     )
@@ -113,6 +127,50 @@ async def test_hit_exposes_snippet_and_date(tmp_brain: Path):
     assert len(hits) == 1
     assert hits[0].when_iso == "2026-04-17"
     assert "coffee" in hits[0].snippet.lower() or "coffee" in hits[0].excerpt.lower()
+
+
+@pytest.mark.asyncio
+async def test_since_iso_filters_older_items(tmp_brain: Path):
+    _write_item(
+        tmp_brain,
+        "00000000-0000-0000-0000-00000000aa01",
+        "Meeting with Aditya.",
+        ["Aditya"],
+        "2025-01-15",
+    )
+    _write_item(
+        tmp_brain,
+        "00000000-0000-0000-0000-00000000aa02",
+        "Another meeting with Aditya.",
+        ["Aditya"],
+        "2026-04-17",
+    )
+    retriever = Retriever(brain_root=tmp_brain, embedder=_Embedder())
+    hits = await retriever.search("Aditya", k=10, since_iso="2026-01-01")
+    ids = [h.item_id[-4:] for h in hits]
+    assert "aa02" in ids and "aa01" not in ids
+
+
+@pytest.mark.asyncio
+async def test_until_iso_filters_newer_items(tmp_brain: Path):
+    _write_item(
+        tmp_brain,
+        "00000000-0000-0000-0000-00000000bb01",
+        "Old meeting.",
+        ["Aditya"],
+        "2025-01-15",
+    )
+    _write_item(
+        tmp_brain,
+        "00000000-0000-0000-0000-00000000bb02",
+        "New meeting.",
+        ["Aditya"],
+        "2026-04-17",
+    )
+    retriever = Retriever(brain_root=tmp_brain, embedder=_Embedder())
+    hits = await retriever.search("Aditya", k=10, until_iso="2026-01-01")
+    ids = [h.item_id[-4:] for h in hits]
+    assert "bb01" in ids and "bb02" not in ids
 
 
 def test_retrieval_hit_is_dataclass():

@@ -44,15 +44,18 @@ class FTSIndex:
     def search(self, query: str, *, k: int) -> list[FTSHit]:
         if not query.strip():
             return []
-        # Use bm25() for scoring. FTS5 bm25() returns a negative number where
-        # less-negative == better match. We invert so higher == better.
+        # FTS5 bm25() returns a NEGATIVE number for any match, with more
+        # negative == better match. We flip the sign so higher == better and
+        # scores stay non-negative and monotonic (no 1/(1+x) blowup when
+        # raw_bm25 approaches -1). Callers that want a 0-1 scale should
+        # normalize per query (max-scale).
         rows = self._conn.execute(
             "SELECT id, bm25(items_fts) AS raw_score, "
             "snippet(items_fts, 1, '', '', ' … ', 16) AS snip "
             "FROM items_fts WHERE items_fts MATCH ? ORDER BY raw_score LIMIT ?",
             (_sanitize(query), k),
         ).fetchall()
-        return [FTSHit(id=r[0], score=1.0 / (1.0 + float(r[1])), snippet=r[2] or "") for r in rows]
+        return [FTSHit(id=r[0], score=-float(r[1]), snippet=r[2] or "") for r in rows]
 
     def close(self) -> None:
         self._conn.close()
