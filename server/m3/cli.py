@@ -114,6 +114,49 @@ def _make_embedder():
     return FastEmbedProvider()
 
 
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Fragment to search for."),
+    brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+    k: int = typer.Option(10, "--k", help="Max number of results."),
+):
+    """Search the brain by fragment."""
+    import asyncio as _asyncio
+    from m3.core.retrieve import Retriever
+    brain_root = brain or _default_brain()
+    if not (brain_root / "self.md").exists():
+        typer.echo(f"brain at {brain_root} is not initialized", err=True)
+        raise typer.Exit(code=1)
+    retriever = Retriever(brain_root=brain_root, embedder=_make_embedder())
+    hits = _asyncio.run(retriever.search(query, k=k))
+    if not hits:
+        typer.echo("(no hits)")
+        return
+    for i, h in enumerate(hits, 1):
+        typer.echo(f"{i}. [{h.kind}] {h.when_iso or '----'} — {h.excerpt}")
+        for r in h.reasons:
+            typer.echo(f"     · {r}")
+        typer.echo(f"     id: {h.item_id}  score: {h.score:.3f}")
+
+
+@app.command()
+def reindex(
+    brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+):
+    """Rebuild FTS, hook, and vector indexes from items/meta."""
+    import asyncio as _asyncio
+    from m3.brain.reindex import reindex_all
+    brain_root = brain or _default_brain()
+    if not (brain_root / "self.md").exists():
+        typer.echo(f"brain at {brain_root} is not initialized", err=True)
+        raise typer.Exit(code=1)
+    result = _asyncio.run(reindex_all(brain_root, embedder=_make_embedder()))
+    typer.echo(f"indexed {result.items_indexed} items")
+    if result.errors:
+        for e in result.errors:
+            typer.echo(f"  error: {e}", err=True)
+
+
 class _FakeLLM:
     supports_tools = True
     supports_vision = False
