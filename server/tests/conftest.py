@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+
+@pytest.fixture
+def tmp_brain(tmp_path: Path) -> Path:
+    """A freshly-initialized ~/brain/ directory rooted at a pytest tmp path."""
+    from m3.brain.layout import init_brain
+
+    init_brain(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def sample_item_text() -> str:
+    return (
+        "Had a call with Aditya yesterday about the Pilot Path rollout. "
+        "He thinks we should delay by two weeks. I disagree — FluentCRM "
+        "is the wrong tool for us, and pushing the date doesn't change that."
+    )
+
+
+@pytest.fixture
+def sample_item_id() -> uuid.UUID:
+    # Stable UUID for snapshot-style tests
+    return uuid.UUID("11111111-1111-1111-1111-111111111111")
+
+
+class FakeLLM:
+    """Returns canned tool-use responses keyed on the text content."""
+
+    def __init__(self, canned: dict[str, dict[str, Any]] | None = None) -> None:
+        self._canned = canned or {}
+        self.calls: list[dict[str, Any]] = []
+
+    def set_response(self, key: str, response: dict[str, Any]) -> None:
+        self._canned[key] = response
+
+    async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
+        from m3.core.llm.base import ToolResult
+
+        self.calls.append({"messages": messages, "system": system, "tool_choice": tool_choice})
+        user_text = messages[-1]["content"] if isinstance(messages[-1]["content"], str) else ""
+        for key, resp in self._canned.items():
+            if key in user_text:
+                return ToolResult(tool_name=tool_choice, input=resp)
+        return ToolResult(tool_name=tool_choice, input={"kind": "personal", "interpretation": {"what_happened": "", "when": {"iso": None, "source": "unknown"}, "confidence": 0.0}, "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": []})
+
+    supports_tools = True
+    supports_vision = False
+    supports_audio = False
+
+
+@pytest.fixture
+def fake_llm() -> FakeLLM:
+    return FakeLLM()
+
+
+@pytest.fixture(autouse=True)
+def _git_identity_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure git commits in tests have an identity, without touching the user's global config."""
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "m3-test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@m3.local")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "m3-test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@m3.local")
