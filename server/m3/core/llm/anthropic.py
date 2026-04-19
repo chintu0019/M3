@@ -1,110 +1,21 @@
 """
-M3 LLM Provider — abstractions and implementations for LLM + embeddings.
+Anthropic and OpenAI-compatible LLM providers.
 
-LLMProvider handles text generation (Anthropic Claude).
-EmbeddingProvider handles vector embeddings (fastembed local by default).
-
-Providers expose capability flags so engines can pick a rich single-call path
-when tool use / vision is available, and fall back to multi-call JSON-repair
-loops only when they aren't.
+``AnthropicProvider`` speaks the Messages API directly; ``OpenAICompatibleProvider``
+works with any endpoint that talks the OpenAI chat-completions API (OpenAI,
+Groq, OpenRouter, Together, Ollama, llama.cpp, ...).
 """
 
-import asyncio
 import base64
 import json
 import logging
-from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 
 import anthropic
 
-from m3.config import EmbeddingSettings, LLMSettings
+from m3.core.llm.base import LLMProvider, Tool, ToolResult
 
 logger = logging.getLogger("m3.llm")
-
-
-# --- Abstractions ---
-
-
-@dataclass
-class Tool:
-    """A tool the LLM can invoke. input_schema is a JSON Schema object that
-    the provider enforces: when present, the tool call's arguments are
-    guaranteed to be valid JSON matching the schema."""
-    name: str
-    description: str
-    input_schema: dict
-
-
-@dataclass
-class ToolResult:
-    """Result of a forced/selected tool call. `input` is already parsed JSON."""
-    tool_name: str
-    input: dict
-    stop_reason: str = "tool_use"
-    text: str = ""  # Any text the model emitted alongside the tool call
-    raw_response: dict = field(default_factory=dict)
-
-
-class LLMProvider(ABC):
-    # Capability flags. Engines read these to choose between a rich single-call
-    # path (tool use / structured output / multimodal) and a text-only fallback.
-    supports_tools: bool = False
-    supports_vision: bool = False
-    supports_audio: bool = False
-
-    @abstractmethod
-    async def complete(
-        self,
-        messages: list[dict],
-        system: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-    ) -> str: ...
-
-    @abstractmethod
-    async def complete_stream(
-        self,
-        messages: list[dict],
-        system: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-    ) -> AsyncIterator[str]: ...
-
-    async def complete_tool(
-        self,
-        messages: list[dict],
-        tools: list[Tool],
-        system: str | None = None,
-        tool_choice: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.2,
-    ) -> ToolResult:
-        """Invoke the model with tool definitions and return the tool call.
-
-        If `tool_choice` names a tool, the model is forced to invoke that tool,
-        which guarantees schema-valid JSON. If None, the model may choose to
-        call any tool or respond as text (text is returned in ToolResult.text
-        with tool_name="").
-
-        Providers that set supports_tools=False raise NotImplementedError;
-        callers are expected to check the flag and fall back to a prompt-based
-        JSON path.
-        """
-        raise NotImplementedError("This provider does not support tool use")
-
-
-class EmbeddingProvider(ABC):
-    @abstractmethod
-    async def embed(self, texts: list[str]) -> list[list[float]]: ...
-
-    @property
-    @abstractmethod
-    def dimensions(self) -> int: ...
-
-
-# --- Content helpers ---
 
 
 def make_content_blocks(
@@ -136,9 +47,6 @@ def make_content_blocks(
     if text:
         blocks.append({"type": "text", "text": text})
     return blocks
-
-
-# --- Anthropic implementation ---
 
 
 class AnthropicProvider(LLMProvider):
@@ -236,9 +144,6 @@ class AnthropicProvider(LLMProvider):
             stop_reason=response.stop_reason or "end_turn",
             text="".join(text_parts),
         )
-
-
-# --- OpenAI-compatible implementation (MiniMax, OpenRouter, Groq, Together, Ollama, etc.) ---
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -390,60 +295,3 @@ class OpenAICompatibleProvider(LLMProvider):
                 content = "\n".join(text_parts) if text_parts else ""
             normalized.append({"role": msg["role"], "content": content})
         return normalized
-
-
-# --- FastEmbed local embedding ---
-
-
-class FastEmbedProvider(EmbeddingProvider):
-    """Local CPU-based embeddings via fastembed + ONNX runtime."""
-
-    def __init__(self, model: str = "nomic-ai/nomic-embed-text-v1.5", dim: int = 768):
-        from fastembed import TextEmbedding
-
-        self._model_name = model
-        self._dim = dim
-        self._model = TextEmbedding(model_name=model)
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        def _embed():
-            embeddings = list(self._model.embed(texts))
-            return [e.tolist() for e in embeddings]
-
-        return await asyncio.to_thread(_embed)
-
-    @property
-    def dimensions(self) -> int:
-        return self._dim
-
-
-# --- Factories ---
-
-
-def create_llm_provider(settings: LLMSettings) -> LLMProvider:
-    provider_config = settings.providers.get(settings.default_provider)
-    if not provider_config:
-        raise ValueError(f"LLM provider '{settings.default_provider}' not configured")
-
-    if provider_config.type == "anthropic":
-        return AnthropicProvider(api_key=provider_config.api_key, model=provider_config.model)
-
-    if provider_config.type == "openai_compatible":
-        if not provider_config.base_url:
-            raise ValueError("openai_compatible provider requires a base_url")
-        return OpenAICompatibleProvider(
-            api_key=provider_config.api_key,
-            model=provider_config.model,
-            base_url=provider_config.base_url,
-            supports_tools=provider_config.supports_tools,
-            supports_vision=provider_config.supports_vision,
-        )
-
-    raise ValueError(f"Unknown LLM provider type: {provider_config.type}")
-
-
-def create_embedding_provider(settings: EmbeddingSettings) -> EmbeddingProvider:
-    if settings.provider == "fastembed":
-        return FastEmbedProvider(model=settings.model, dim=settings.dimensions)
-
-    raise ValueError(f"Unknown embedding provider: {settings.provider}")
