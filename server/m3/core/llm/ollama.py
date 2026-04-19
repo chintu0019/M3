@@ -127,7 +127,9 @@ class OllamaProvider(LLMProvider):
                 "ollama: tool_calls returned but missing required schema keys; falling back"
             )
         else:
-            schema_str = json.dumps(chosen.input_schema, indent=2)
+            logger.warning("ollama: no tool_calls; falling back to JSON-in-prompt parse")
+
+        schema_str = json.dumps(chosen.input_schema, indent=2)
         repair_prompt = (
             f"Call the `{chosen.name}` tool. Reply with valid JSON only matching this schema:\n"
             f"{schema_str}\nNo prose, no fences."
