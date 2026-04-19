@@ -108,21 +108,26 @@ class OllamaProvider(LLMProvider):
         r.raise_for_status()
         data = r.json()
         tool_calls = data.get("message", {}).get("tool_calls") or []
+        tool_by_name = {t.name: t for t in tools}
+        chosen = tool_by_name.get(tool_choice or "") or tools[0]
         if tool_calls:
             call = tool_calls[0]
             fn = call.get("function", {})
-            return ToolResult(
-                tool_name=fn.get("name", tool_choice or ""),
-                input=fn.get("arguments") or {},
-                stop_reason="tool_use",
-                text="",
-                raw_response=data,
+            args = fn.get("arguments") or {}
+            args = _recover_stringified_payload(args, chosen.input_schema)
+            if _satisfies_required(args, chosen.input_schema):
+                return ToolResult(
+                    tool_name=fn.get("name", tool_choice or ""),
+                    input=args,
+                    stop_reason="tool_use",
+                    text="",
+                    raw_response=data,
+                )
+            logger.warning(
+                "ollama: tool_calls returned but missing required schema keys; falling back"
             )
-
-        logger.warning("ollama: no tool_calls; falling back to JSON-in-prompt parse")
-        tool_by_name = {t.name: t for t in tools}
-        chosen = tool_by_name.get(tool_choice or "") or tools[0]
-        schema_str = json.dumps(chosen.input_schema, indent=2)
+        else:
+            schema_str = json.dumps(chosen.input_schema, indent=2)
         repair_prompt = (
             f"Call the `{chosen.name}` tool. Reply with valid JSON only matching this schema:\n"
             f"{schema_str}\nNo prose, no fences."
@@ -150,6 +155,35 @@ class OllamaProvider(LLMProvider):
             text="",
             raw_response=r2.json(),
         )
+
+
+def _satisfies_required(args: dict, schema: dict) -> bool:
+    """Cheap structural check: every key in the schema's `required` list must be present."""
+    if not isinstance(args, dict):
+        return False
+    for key in (schema.get("required") or []):
+        if key not in args:
+            return False
+    return True
+
+
+def _recover_stringified_payload(args: dict, schema: dict) -> dict:
+    """Some small models wrap their JSON output under a single key whose value is a
+    stringified JSON blob (e.g. `{"map": '{"kind": "personal", ...}'}`). When that
+    happens, try to unwrap the single-string-valued key and parse it; return the
+    inner object if it satisfies the schema's required fields."""
+    if not isinstance(args, dict) or len(args) != 1:
+        return args
+    only_value = next(iter(args.values()))
+    if not isinstance(only_value, str):
+        return args
+    try:
+        inner = json.loads(only_value)
+    except json.JSONDecodeError:
+        return args
+    if isinstance(inner, dict) and _satisfies_required(inner, schema):
+        return inner
+    return args
 
 
 def _parse_json(text: str) -> dict:
