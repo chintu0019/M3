@@ -30,6 +30,10 @@ class _ScriptedLLM:
         # "final" — no tool call, just text
         return ToolResult(tool_name="", input={}, text=turn["text"])
 
+    async def complete(self, *, messages, system=None, max_tokens=2048, temperature=0.2):
+        # Invoked by the agent's forced-final path when rounds are exhausted.
+        return "(forced final from scripted llm)"
+
 
 @pytest.mark.asyncio
 async def test_agent_final_message_no_tools(tmp_brain):

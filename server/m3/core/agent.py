@@ -69,9 +69,11 @@ async def run_agent(
         messages.append({"role": "user", "content": f"[tool:{tool_name}] result:\n{_json.dumps(tool_result)[:4000]}"})
 
     # Ran out of rounds — force a final answer from what we have.
-    forced = await llm.complete_tool(
-        messages=messages + [{"role": "user", "content": "You've used your tool rounds. Give your best answer now, no more tool calls."}],
-        tools=[], system=SYSTEM_PROMPT, tool_choice=None,
-        max_tokens=1024, temperature=0.2,
+    # Use plain text completion (not tool completion) so providers that can't
+    # handle an empty tools list don't explode.
+    forced_text = await llm.complete(
+        messages=messages + [{"role": "user",
+                              "content": "You've used your tool rounds. Give your best answer now based on the tool results above; do not call any more tools."}],
+        system=SYSTEM_PROMPT, max_tokens=1024, temperature=0.2,
     )
-    yield AgentEvent(type="final", content=forced.text or "(tool round limit reached)")
+    yield AgentEvent(type="final", content=(forced_text or "").strip() or "(tool round limit reached)")
