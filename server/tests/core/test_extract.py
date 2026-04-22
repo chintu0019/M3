@@ -73,3 +73,47 @@ def test_system_prompt_interpolates_today_iso():
     from m3.core.extract import build_system_prompt
     s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
     assert "2026-04-19" in s
+
+
+def test_system_prompt_has_subject_attribution_rule():
+    """Rule 4 guards against mis-attributing the user's actions to named third parties."""
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
+    assert "THE USER IS THE IMPLICIT SUBJECT" in s
+    # Must spell out the specific failure mode we've seen
+    assert "coffee with Aditya" in s
+    assert "attribute" in s.lower() or "counterparty" in s.lower()
+
+
+def test_system_prompt_has_slot_routing_guide():
+    """The slot guide disambiguates People vs Preferences vs Projects."""
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
+    # Each canonical slot must appear with a clear description
+    for slot in ("Preferences", "People", "Projects", "Goals", "Context", "Beliefs", "Timeline"):
+        assert f"- {slot}" in s or f"{slot} " in s, f"slot {slot!r} missing from routing guide"
+    # Must explicitly call out the People-vs-Preferences distinction
+    assert "People" in s and "Preferences" in s
+    assert "NOT in Preferences" in s or "belongs here" in s
+
+
+def test_few_shots_cover_person_focused_personal_note():
+    """Example 1 should model a 'met X for coffee' note landing in People, not Preferences."""
+    from m3.core.extract import FEW_SHOT_EXAMPLES
+    # The person-focused example must exist and must use the People slot
+    assert "coffee with Aditya" in FEW_SHOT_EXAMPLES
+    # Must route to People slot
+    assert '"slot": "People"' in FEW_SHOT_EXAMPLES
+    # Entity update for the person
+    assert '"canonical_name": "Aditya"' in FEW_SHOT_EXAMPLES
+    assert '"entity_type": "person"' in FEW_SHOT_EXAMPLES
+
+
+def test_few_shots_cover_project_self_action():
+    """Example 3 should model 'I bought/built X for my own project' landing in Projects."""
+    from m3.core.extract import FEW_SHOT_EXAMPLES
+    # The self-action project example (the kesavulu.com case from real Telegram use)
+    assert "kesavulu.com" in FEW_SHOT_EXAMPLES or "my portfolio" in FEW_SHOT_EXAMPLES
+    assert '"slot": "Projects"' in FEW_SHOT_EXAMPLES
+    # Explicitly NOT attributing the user's purchase to any third-party person
+    assert '"entity_type": "project"' in FEW_SHOT_EXAMPLES

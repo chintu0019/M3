@@ -213,49 +213,120 @@ def process_item_tool_schema() -> dict:
 
 FEW_SHOT_EXAMPLES: str = """# Worked examples
 
-## Example 1 — personal (note with stance)
+## Example 1 — personal, person-focused ("I met X")
 
 Input:
-"Had a call with Aditya about the Pilot Path rollout. He thinks we should
-delay by two weeks. I disagree — FluentCRM is wrong for us and pushing the
-date doesn't change that."
+"Had coffee with Aditya today. He's leaning into the Pilot Path partnership
+conversation. Will loop back next week."
+
+The user is Manoj. Manoj had the coffee; Aditya is the counterparty. The
+primary content is an interaction with a person, so the self update goes
+to `People`, NOT `Preferences`. Also update the entity page for Aditya.
 
 Correct process_item output (abridged):
 {
   "kind": "personal",
   "interpretation": {
-    "what_happened": "Call with Aditya about Pilot Path rollout timing; user pushed back on delay and on FluentCRM choice.",
+    "what_happened": "Manoj met Aditya for coffee; Aditya is leaning in on the Pilot Path partnership.",
     "when": {"iso": "<today>", "source": "ingest_time"},
     "confidence": 0.9
   },
   "open_questions": [],
   "hooks": {
     "who": [{"name": "Aditya"}],
-    "what": [{"name": "FluentCRM"}],
-    "where": [],
     "project": ["Pilot Path"],
-    "stance": [{"entity_name": "FluentCRM", "value": "negative", "evidence_quote": "wrong for us"}]
+    "stance": []
   },
   "self_updates": [
-    {"slot": "Beliefs", "operation": "append", "section_heading": null,
-     "new_content": "### FluentCRM\\nWrong tool for our workflow; pushing project dates does not address the underlying fit issue.",
-     "change_summary": "recorded negative stance on FluentCRM", "cites": ["<item_id>"]}
+    {"slot": "People", "operation": "append", "section_heading": null,
+     "new_content": "### Aditya\\nCoffee on <today>; leaning into the Pilot Path partnership. Follow up next week.",
+     "change_summary": "logged coffee with Aditya", "cites": ["<item_id>"]}
   ],
   "entity_updates": [
     {"canonical_name": "Aditya", "entity_type": "person", "merge_aliases": [],
      "related_entity_names": ["Pilot Path"],
      "section_update": {"operation": "append", "section_heading": null,
-       "new_content": "## Your history\\n\\n- Called about Pilot Path rollout; argued for a two-week delay.",
-       "change_summary": "first mention"}},
-    {"canonical_name": "FluentCRM", "entity_type": "tool", "merge_aliases": [],
-     "related_entity_names": ["Pilot Path"],
-     "section_update": {"operation": "append", "section_heading": null,
-       "new_content": "## Your stance\\n\\n- Wrong tool for our workflow (as of <today>).",
-       "change_summary": "negative stance captured"}}
+       "new_content": "## Your history\\n\\n- <today>: coffee; leaning into Pilot Path partnership.",
+       "change_summary": "coffee catch-up"}}
   ]
 }
 
-## Example 2 — reference (article saved for learning)
+## Example 2 — personal, stance ("I think X is bad")
+
+Input:
+"FluentCRM is the wrong tool for our workflow. We've been burned by its
+limitations before. Pushing back on it in the next Pacific sync."
+
+Manoj has a negative stance on FluentCRM. Stance goes to `Beliefs`, not
+`Preferences` (Preferences is for lightweight likes/dislikes; stances
+with reasons go to Beliefs). Entity update goes on FluentCRM.
+
+Correct process_item output (abridged):
+{
+  "kind": "personal",
+  "interpretation": {
+    "what_happened": "Manoj has a negative stance on FluentCRM; plans to push back in the next Pacific sync.",
+    "when": {"iso": "<today>", "source": "ingest_time"},
+    "confidence": 0.9
+  },
+  "hooks": {
+    "what": [{"name": "FluentCRM"}],
+    "project": ["Pacific"],
+    "stance": [{"entity_name": "FluentCRM", "value": "negative", "evidence_quote": "wrong tool for our workflow"}]
+  },
+  "self_updates": [
+    {"slot": "Beliefs", "operation": "append", "section_heading": null,
+     "new_content": "### FluentCRM\\nWrong tool for our workflow; pushing back in the next Pacific sync.",
+     "change_summary": "recorded negative stance", "cites": ["<item_id>"]}
+  ],
+  "entity_updates": [
+    {"canonical_name": "FluentCRM", "entity_type": "tool", "merge_aliases": [],
+     "related_entity_names": ["Pacific"],
+     "section_update": {"operation": "append", "section_heading": null,
+       "new_content": "## Your stance\\n\\n- Wrong tool for our workflow (as of <today>).",
+       "change_summary": "negative stance"}}
+  ]
+}
+
+## Example 3 — personal, project work ("I built/bought X")
+
+Input:
+"Bought kesavulu.com from Namecheap to build my portfolio. Working on it
+this weekend."
+
+The subject is Manoj. He bought the domain, he's building the portfolio.
+This is a project the user owns; goes to `Projects`, NOT `People` and
+NOT attributed to any other person. Create a `kesavulu.com portfolio`
+project entity; DO NOT create or touch an entity for any name that
+happens to appear in the note.
+
+Correct process_item output (abridged):
+{
+  "kind": "personal",
+  "interpretation": {
+    "what_happened": "Manoj bought kesavulu.com to build his portfolio site; work ongoing this weekend.",
+    "when": {"iso": "<today>", "source": "ingest_time"},
+    "confidence": 0.9
+  },
+  "hooks": {
+    "what": [{"name": "kesavulu.com"}, {"name": "Namecheap"}],
+    "project": ["portfolio"]
+  },
+  "self_updates": [
+    {"slot": "Projects", "operation": "append", "section_heading": null,
+     "new_content": "### Portfolio site (kesavulu.com)\\nDomain purchased from Namecheap <today>. Building this weekend.",
+     "change_summary": "new project: portfolio site", "cites": ["<item_id>"]}
+  ],
+  "entity_updates": [
+    {"canonical_name": "kesavulu.com portfolio", "entity_type": "project", "merge_aliases": ["kesavulu.com"],
+     "related_entity_names": [],
+     "section_update": {"operation": "append", "section_heading": null,
+       "new_content": "## Your history\\n\\n- <today>: bought domain from Namecheap; building this weekend.",
+       "change_summary": "project kickoff"}}
+  ]
+}
+
+## Example 4 — reference (article saved for learning)
 
 Input:
 "https://example.com/post/attention-is-all-you-need — great refresher on
@@ -283,7 +354,7 @@ Correct process_item output (abridged):
   ]
 }
 
-## Example 3 — record (receipt)
+## Example 5 — record (receipt)
 
 Input:
 "Uber receipt, 2026-04-15: $42.50 USD, home to office. Invoice INV-00123."
@@ -304,7 +375,7 @@ Correct process_item output (abridged):
   }
 }
 
-## Example 4 — signal (news link)
+## Example 6 — signal (news link)
 
 Input:
 "Anthropic ships Claude 4.7 Sonnet today; 1M context window on Opus."
@@ -324,7 +395,7 @@ Correct process_item output (abridged):
   }
 }
 
-## Example 5 — ambiguous (raises an open question)
+## Example 7 — ambiguous (raises an open question)
 
 Input:
 "Meeting with J tomorrow at 3pm to discuss the Q2 roadmap."
@@ -351,7 +422,7 @@ Correct process_item output (abridged):
 def build_system_prompt(*, today_iso: str, self_doc: str, candidate_entities_block: str) -> str:
     base_prompt = f"""You are M3's extraction engine. Today is {today_iso}.
 
-You produce structured output describing one raw item. You must follow three rules:
+You produce structured output describing one raw item. You must follow four rules:
 
 1. TEMPORAL GROUNDING. Resolve relative dates against today. Never leave `interpretation.when.iso`
    as null unless the date is truly unknowable; in that case set `when.source` to "unknown".
@@ -366,11 +437,35 @@ You produce structured output describing one raw item. You must follow three rul
    existing heading, `revise` when the stance or facts actually flipped, `append` only when the
    content is genuinely new. Blind appends are forbidden.
 
+4. THE USER IS THE IMPLICIT SUBJECT. This content is the user's own. Treat first-person verbs
+   ("I bought", "had coffee with", "built", "thought") as the USER'S actions. When a sentence
+   says "had coffee with Aditya", the user had the coffee; Aditya is the counterparty, not the
+   actor. Never attribute the user's actions to a named third party unless the content explicitly
+   says so ("Aditya built X", "Sarah said Y"). A note of the form "bought X for my Y" describes
+   something the user did for themselves — do NOT attribute it to any other name that happens
+   to appear in the note.
+
 Route every item into one of four kinds:
 - personal: user's own notes, thoughts, conversations, voice memos
 - reference: articles / papers / books the user saved (neutral summary + user's perspective)
 - record: receipts / bills / tickets (structured fields; no narrative page)
 - signal: news / tweets / random interesting links (one-line takeaway; no entity page)
+
+# Self slot routing (pick the slot that fits the content's PRIMARY subject)
+
+- Preferences — lightweight likes/dislikes and personal picks, e.g. "I prefer black coffee",
+                "I use Linear for tickets". A single adjective about the user's taste.
+- People      — who someone is and your relationship to them ("Aditya is a coworker"), or
+                notable interactions with them ("Met Aditya for coffee", "Called Sarah about X").
+                **Any note whose primary content is about a person (meeting them, talking to
+                them, learning something about them) belongs here, NOT in Preferences.**
+- Projects    — things the USER is actively working on ("building portfolio at kesavulu.com",
+                "rewriting M3"). Not reference material. Not other people's projects.
+- Goals       — what the user is trying to achieve, short or long term.
+- Context     — the user's current life situation / state / location / phase.
+- Beliefs     — stances, opinions, recurring principles with reasoning behind them.
+                Stronger and more reasoned than Preferences.
+- Timeline    — dated events worth anchoring chronologically.
 
 # Current self
 {self_doc}
