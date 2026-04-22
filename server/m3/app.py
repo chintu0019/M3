@@ -14,6 +14,8 @@ from typing import Protocol
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from m3.api.entities_new import build_entities_router
 from m3.api.ingest_http import build_ingest_router
@@ -48,6 +50,23 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     @app.get("/api/v1/status")
     async def status():
         return {"ok": True, "brain_root": str(brain_root)}
+
+    # Serve the built React client (if the bundle exists). This lets `m3 start`
+    # open the browser to a working SPA without any separate build step at run time.
+    _client_dist = Path(__file__).resolve().parent.parent.parent / "client" / "dist"
+    if _client_dist.exists():
+        app.mount("/assets", StaticFiles(directory=_client_dist / "assets"), name="assets")
+
+        @app.get("/", include_in_schema=False)
+        async def _index():
+            return FileResponse(_client_dist / "index.html")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def _spa_fallback(full_path: str):
+            # Let API routes 404 normally; only fallback for non-/api paths.
+            if full_path.startswith("api/"):
+                return FileResponse(_client_dist / "index.html", status_code=404)
+            return FileResponse(_client_dist / "index.html")
 
     return app
 

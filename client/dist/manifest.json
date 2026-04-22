@@ -1,0 +1,9 @@
+{
+  "name": "M3 - Personal Knowledge OS",
+  "short_name": "M3",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0f0f13",
+  "background_color": "#0f0f13",
+  "icons": []
+}
