@@ -47,3 +47,29 @@ def test_process_item_tool_schema_is_valid_json_schema():
     assert schema["type"] == "object"
     assert "kind" in schema["properties"]
     assert "interpretation" in schema["properties"]
+
+
+def test_system_prompt_includes_few_shot_examples():
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="(empty)", candidate_entities_block="(none)")
+    assert "Worked examples" in s or "Example 1" in s
+    # Should show the shape for each kind
+    assert "personal" in s and "reference" in s and "record" in s and "signal" in s
+    # An ambiguous example with an open question
+    assert "open_questions" in s
+    # An entity update shape to encourage filling
+    assert "section_update" in s
+
+
+def test_system_prompt_ends_with_call_instruction():
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
+    # The final instruction to call the tool should be present, not buried
+    assert "process_item" in s.lower()
+    assert s.rstrip().endswith("Do not reply with prose.") or "Call the `process_item` tool exactly once" in s
+
+
+def test_system_prompt_interpolates_today_iso():
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
+    assert "2026-04-19" in s

@@ -207,8 +207,145 @@ def process_item_tool_schema() -> dict:
     return ExtractionOutput.model_json_schema()
 
 
+FEW_SHOT_EXAMPLES: str = """# Worked examples
+
+## Example 1 — personal (note with stance)
+
+Input:
+"Had a call with Aditya about the Pilot Path rollout. He thinks we should
+delay by two weeks. I disagree — FluentCRM is wrong for us and pushing the
+date doesn't change that."
+
+Correct process_item output (abridged):
+{
+  "kind": "personal",
+  "interpretation": {
+    "what_happened": "Call with Aditya about Pilot Path rollout timing; user pushed back on delay and on FluentCRM choice.",
+    "when": {"iso": "<today>", "source": "ingest_time"},
+    "confidence": 0.9
+  },
+  "open_questions": [],
+  "hooks": {
+    "who": [{"name": "Aditya"}],
+    "what": [{"name": "FluentCRM"}],
+    "where": [],
+    "project": ["Pilot Path"],
+    "stance": [{"entity_name": "FluentCRM", "value": "negative", "evidence_quote": "wrong for us"}]
+  },
+  "self_updates": [
+    {"slot": "Beliefs", "operation": "append", "section_heading": null,
+     "new_content": "### FluentCRM\\nWrong tool for our workflow; pushing project dates does not address the underlying fit issue.",
+     "change_summary": "recorded negative stance on FluentCRM", "cites": ["<item_id>"]}
+  ],
+  "entity_updates": [
+    {"canonical_name": "Aditya", "entity_type": "person", "merge_aliases": [],
+     "related_entity_names": ["Pilot Path"],
+     "section_update": {"operation": "append", "section_heading": null,
+       "new_content": "## Your history\\n\\n- Called about Pilot Path rollout; argued for a two-week delay.",
+       "change_summary": "first mention"}},
+    {"canonical_name": "FluentCRM", "entity_type": "tool", "merge_aliases": [],
+     "related_entity_names": ["Pilot Path"],
+     "section_update": {"operation": "append", "section_heading": null,
+       "new_content": "## Your stance\\n\\n- Wrong tool for our workflow (as of <today>).",
+       "change_summary": "negative stance captured"}}
+  ]
+}
+
+## Example 2 — reference (article saved for learning)
+
+Input:
+"https://example.com/post/attention-is-all-you-need — great refresher on
+transformer internals, bookmarked for the Pacific project kickoff."
+
+Correct process_item output (abridged):
+{
+  "kind": "reference",
+  "interpretation": {
+    "what_happened": "Bookmarked a transformer internals article; saved for Pacific project context.",
+    "when": {"iso": "<today>", "source": "ingest_time"},
+    "confidence": 0.9
+  },
+  "hooks": {
+    "what": [{"name": "transformers"}, {"name": "attention mechanisms"}],
+    "project": ["Pacific"]
+  },
+  "entity_updates": [
+    {"canonical_name": "Transformers", "entity_type": "concept",
+     "summary_external": "Neural network architecture based on attention; seminal paper 'Attention Is All You Need'.",
+     "section_update": {"operation": "append", "section_heading": null,
+       "new_content": "## Why saved\\n\\nRefresher on internals before the Pacific project kickoff.",
+       "change_summary": "saved as reference"},
+     "related_entity_names": ["Pacific"]}
+  ]
+}
+
+## Example 3 — record (receipt)
+
+Input:
+"Uber receipt, 2026-04-15: $42.50 USD, home to office. Invoice INV-00123."
+
+Correct process_item output (abridged):
+{
+  "kind": "record",
+  "interpretation": {
+    "what_happened": "Uber ride receipt.",
+    "when": {"iso": "2026-04-15", "source": "explicit_in_content"},
+    "confidence": 0.95
+  },
+  "hooks": {"what": [{"name": "Uber"}]},
+  "structured_fields": {
+    "amount": 42.50, "currency": "USD", "vendor": "Uber",
+    "date": "2026-04-15", "category": "transportation",
+    "due_date": null, "reference_id": "INV-00123"
+  }
+}
+
+## Example 4 — signal (news link)
+
+Input:
+"Anthropic ships Claude 4.7 Sonnet today; 1M context window on Opus."
+
+Correct process_item output (abridged):
+{
+  "kind": "signal",
+  "interpretation": {
+    "what_happened": "Anthropic released Claude 4.7 with 1M context on Opus.",
+    "when": {"iso": "<today>", "source": "ingest_time"},
+    "confidence": 0.95
+  },
+  "hooks": {"what": [{"name": "Claude"}, {"name": "Anthropic"}]},
+  "signal": {
+    "topic_entities": ["Anthropic", "Claude"],
+    "one_line_takeaway": "Claude 4.7 ships with 1M context on Opus."
+  }
+}
+
+## Example 5 — ambiguous (raises an open question)
+
+Input:
+"Meeting with J tomorrow at 3pm to discuss the Q2 roadmap."
+
+Correct process_item output (abridged):
+{
+  "kind": "personal",
+  "interpretation": {
+    "what_happened": "Upcoming meeting about Q2 roadmap; counterparty identity ambiguous.",
+    "when": {"iso": "<tomorrow>", "source": "inferred_from_metadata"},
+    "confidence": 0.4
+  },
+  "open_questions": [
+    {"question": "Who is J in the roadmap meeting note?",
+     "context_snippet": "Meeting with J tomorrow at 3pm to discuss the Q2 roadmap.",
+     "blocks": ["hook:who:J"]}
+  ],
+  "hooks": {"what": [{"name": "Q2 roadmap"}]},
+  "self_updates": [],
+  "entity_updates": []
+}"""
+
+
 def build_system_prompt(*, today_iso: str, self_doc: str, candidate_entities_block: str) -> str:
-    return f"""You are M3's extraction engine. Today is {today_iso}.
+    base_prompt = f"""You are M3's extraction engine. Today is {today_iso}.
 
 You produce structured output describing one raw item. You must follow three rules:
 
@@ -235,6 +372,8 @@ Route every item into one of four kinds:
 {self_doc}
 
 # Candidate existing entities (top 20 by vector similarity)
-{candidate_entities_block}
+{candidate_entities_block}"""
 
-Call the `process_item` tool exactly once. Do not reply with prose."""
+    tail = "Call the `process_item` tool exactly once. Do not reply with prose."
+
+    return base_prompt + "\n\n" + FEW_SHOT_EXAMPLES + "\n\n" + tail
