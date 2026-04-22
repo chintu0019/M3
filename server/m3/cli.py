@@ -206,6 +206,71 @@ def eval_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def reprocess(
+    item_id: str = typer.Argument(None, help="Item UUID. Omit and pass --all or --all-unknown for bulk."),
+    brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+    all_items: bool = typer.Option(False, "--all", help="Wipe derived state and replay every item."),
+    only_unknown: bool = typer.Option(False, "--all-unknown", help="Re-extract only items with kind=unknown."),
+    yes: bool = typer.Option(False, "--yes", help="Skip --all confirmation prompt."),
+):
+    """Re-run extraction against existing items using the current LLM/prompt.
+
+    Single item: leaves prior self/entity state alone; may duplicate some content.
+    --all: wipes all derived state (entities, self, records, signals, open questions,
+    changelog) and replays every item. Items themselves are preserved.
+    --all-unknown: re-extracts only items that landed in the kind=unknown fallback.
+    """
+    import asyncio as _asyncio
+    import uuid as _uuid
+
+    from m3.core.reprocess import reprocess_all, reprocess_all_unknown, reprocess_one
+
+    if sum([bool(item_id), all_items, only_unknown]) != 1:
+        typer.echo("Pass exactly one of: <item_id>, --all, --all-unknown", err=True)
+        raise typer.Exit(code=2)
+
+    brain_root = brain or _default_brain()
+    if not (brain_root / "self.md").exists():
+        typer.echo(f"brain at {brain_root} is not initialized", err=True)
+        raise typer.Exit(code=1)
+
+    llm = _make_llm()
+    embedder = _make_embedder()
+
+    if item_id:
+        try:
+            uid = _uuid.UUID(item_id)
+        except ValueError:
+            typer.echo(f"invalid uuid: {item_id}", err=True)
+            raise typer.Exit(code=2)
+        result = _asyncio.run(reprocess_one(brain_root=brain_root, item_id=uid, llm=llm, embedder=embedder))
+    elif only_unknown:
+        result = _asyncio.run(reprocess_all_unknown(brain_root=brain_root, llm=llm, embedder=embedder))
+    else:
+        # --all: confirm before wiping.
+        if not yes:
+            count = len(list((brain_root / "items" / "meta").glob("*.json")))
+            typer.echo(
+                f"This will wipe all derived brain state (entities, self, records, "
+                f"signals, open questions, changelog) and replay {count} items "
+                f"through the current LLM."
+            )
+            typer.echo("Items themselves (originals + meta) are preserved.")
+            if not typer.confirm("Continue?", default=False):
+                typer.echo("aborted")
+                raise typer.Exit(code=1)
+        result = _asyncio.run(reprocess_all(brain_root=brain_root, llm=llm, embedder=embedder))
+
+    typer.echo(f"processed: {result.items_processed}")
+    typer.echo(f"skipped:   {result.items_skipped}")
+    if result.errors:
+        typer.echo("errors:")
+        for e in result.errors:
+            typer.echo(f"  {e}")
+        raise typer.Exit(code=1)
+
+
 telegram_app = typer.Typer(
     help="Telegram capture — ingest messages from a personal bot.",
     invoke_without_command=True,
