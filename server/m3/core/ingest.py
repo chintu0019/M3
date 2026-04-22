@@ -36,6 +36,9 @@ from m3.brain.git import commit_ingest
 from m3.brain.vectors import VectorIndex
 from m3.core.extract import (
     ExtractionOutput,
+    Interpretation,
+    OpenQuestionOut,
+    When,
     build_system_prompt,
     process_item_tool_schema,
 )
@@ -60,6 +63,29 @@ def _safe_json(data: dict | None, max_chars: int = 1500) -> str:
     except (TypeError, ValueError):
         s = str(data)
     return s if len(s) <= max_chars else s[:max_chars] + "…"
+
+
+def _fallback_extraction(text: str) -> ExtractionOutput:
+    """Build a minimal ExtractionOutput for items whose LLM output failed validation
+    twice. Kind is "unknown", confidence 0.0, and we raise an open question so the
+    user sees the miss. The raw item text still flows into FTS/hook indexes via the
+    outer pipeline, which is the whole point — the item stays searchable."""
+    snippet = (text or "").strip()[:200]
+    return ExtractionOutput(
+        kind="unknown",
+        interpretation=Interpretation(
+            what_happened=f"[extraction failed] {snippet}" if snippet else "[extraction failed]",
+            when=When(iso=None, source="unknown"),
+            confidence=0.0,
+        ),
+        open_questions=[
+            OpenQuestionOut(
+                question="Extraction failed; manual review needed.",
+                context_snippet=snippet,
+                blocks=[],
+            ),
+        ],
+    )
 
 
 def _repair_message(exc: ValidationError) -> str:
@@ -170,14 +196,32 @@ class Ingester:
                 assert last_err is not None
                 raise last_err
 
-            parsed = await _extract_with_retry()
+            extraction_error: str | None = None
+            try:
+                parsed = await _extract_with_retry()
+            except ValidationError as e:
+                # Graceful degradation: the LLM couldn't produce a valid schema even
+                # after the corrective retry. Instead of rolling back and losing the
+                # item entirely, write a minimal "unknown"-kind meta so the raw text
+                # still lands in FTS/hook indexes and the user can find + re-trigger
+                # the item via keyword search. Only catches ValidationError — other
+                # exceptions (I/O, LLM transport failures) still roll back.
+                extraction_error = _short(e, max_chars=500)
+                logger.warning(
+                    "ingest %s: extraction failed after retries; writing fallback meta. error: %s",
+                    item_id_str, extraction_error,
+                )
+                parsed = _fallback_extraction(inp.text)
 
             # 1. Meta
+            llm_output_raw = parsed.model_dump()
+            if extraction_error is not None:
+                llm_output_raw["_extraction_error"] = extraction_error
             items_mod.write_meta(self.brain_root, items_mod.ItemMeta(
                 id=inp.item_id, kind=parsed.kind, source=inp.source, created_at=now_iso,
                 original_filename=inp.original_filename, extracted_text=inp.text,
                 when_iso=parsed.interpretation.when.iso, when_source=parsed.interpretation.when.source,
-                hooks=parsed.hooks.model_dump(), llm_output_raw=parsed.model_dump(),
+                hooks=parsed.hooks.model_dump(), llm_output_raw=llm_output_raw,
                 confidence=parsed.interpretation.confidence,
             ))
 
@@ -271,7 +315,11 @@ class Ingester:
             await self._index_item(inp.item_id, inp.text, parsed, entities_touched)
 
             # 7. Commit
-            summary = parsed.interpretation.what_happened[:120] or f"{parsed.kind} item"
+            if extraction_error is not None:
+                snippet = (inp.text or "").strip()[:50]
+                summary = f"[extraction failed] {snippet}" if snippet else "[extraction failed]"
+            else:
+                summary = parsed.interpretation.what_happened[:120] or f"{parsed.kind} item"
             commit_ingest(self.brain_root, item_id=item_id_str, summary=summary)
 
             return IngestOutput(

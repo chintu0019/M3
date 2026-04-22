@@ -130,31 +130,25 @@ async def test_ingest_commits_to_git(ingester, fake_llm, tmp_brain: Path):
 
 @pytest.mark.asyncio
 async def test_ingest_rolls_back_on_failure(ingester, tmp_brain: Path):
-    """A malformed LLM payload must not leave half-written files in the brain."""
+    """Non-ValidationError failures during ingest must still roll back so we don't
+    leave half-written files in the brain. ValidationError itself now has a
+    graceful-degradation path (see test_extraction_falls_back_after_retries_exhausted);
+    this test exercises the case where the LLM provider raises — e.g. a transport
+    error — mid-ingest."""
     import subprocess
 
     item_id = uuid.UUID("aaaaaaaa-cccc-bbbb-dddd-eeeeeeeeeeee")
 
-    # Use an LLM that always emits an invalid `kind`, so both the initial
-    # attempt and the corrective retry fail validation and the original
-    # ValidationError propagates into the ingest rollback.
-    class _AlwaysInvalidKindLLM:
+    class _ExplodingLLM:
         supports_tools = True
         supports_vision = False
         supports_audio = False
 
         async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
-            from m3.core.llm.base import ToolResult
-            return ToolResult(tool_name=tool_choice or "process_item", input={
-                "kind": "weirdo",
-                "interpretation": {
-                    "what_happened": "", "when": {"iso": None, "source": "unknown"}, "confidence": 0.0,
-                },
-                "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
-            })
+            raise RuntimeError("simulated LLM transport failure")
 
-    ingester.llm = _AlwaysInvalidKindLLM()
-    with pytest.raises(Exception):
+    ingester.llm = _ExplodingLLM()
+    with pytest.raises(RuntimeError):
         await ingester.ingest(IngestInput(
             item_id=item_id, source="cli",
             original_bytes=b"some bytes", original_filename="rollback test.txt",
@@ -208,26 +202,50 @@ async def test_extraction_retries_once_on_validation_failure(ingester, fake_llm,
 
 
 @pytest.mark.asyncio
-async def test_extraction_raises_after_retries_exhausted(ingester, tmp_brain):
+async def test_extraction_falls_back_after_retries_exhausted(ingester, tmp_brain: Path):
+    """When the LLM's output fails validation on both the initial call and the
+    corrective retry, ingest writes a fallback meta with kind='unknown' instead
+    of rolling back — the raw text still lands in FTS so the user can find and
+    manually re-trigger the item."""
     import uuid as _uuid
-    from pydantic import ValidationError
-    item_id = _uuid.UUID("dddd0000-0000-0000-0000-000000000002")
+    item_id = _uuid.UUID("eeee0000-0000-0000-0000-000000000001")
 
-    class _AlwaysBadLLM:
+    class _HopelessLLM:
         supports_tools = True
         supports_vision = False
         supports_audio = False
 
         async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
             from m3.core.llm.base import ToolResult
+            # Missing interpretation; retried, still missing — never validates.
             return ToolResult(tool_name=tool_choice, input={"kind": "personal"})
 
-    ingester.llm = _AlwaysBadLLM()
-    with pytest.raises(ValidationError):
-        await ingester.ingest(IngestInput(
-            item_id=item_id, source="cli", original_bytes=None, original_filename=None,
-            content_type="text", text="always bad",
-        ))
+    ingester.llm = _HopelessLLM()
+    out = await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text", text="A note whose extraction will never succeed.",
+    ))
+    assert out.kind == "unknown"
+    assert out.confidence == 0.0
+
+    # Item meta was written and includes the extraction error for debugging.
+    meta = read_meta(ingester.brain_root, item_id)
+    assert meta is not None
+    assert meta.kind == "unknown"
+    assert "_extraction_error" in meta.llm_output_raw
+    assert "A note whose extraction will never succeed." in meta.extracted_text
+
+    # Open question was raised so the user sees the miss.
+    assert any("Extraction failed" in q for q in list_unresolved(ingester.brain_root))
+
+    # Item is searchable via FTS — the whole point of the graceful fallback.
+    from m3.brain.fts import FTSIndex
+    fts = FTSIndex.open(tmp_brain)
+    try:
+        hits = fts.search("note", k=5)
+        assert [h.id for h in hits] == [str(item_id)]
+    finally:
+        fts.close()
 
 
 @pytest.mark.asyncio

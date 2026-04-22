@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-Kind = Literal["personal", "reference", "record", "signal"]
+Kind = Literal["personal", "reference", "record", "signal", "unknown"]
 Operation = Literal["append", "replace_section", "revise"]
 SelfSlot = Literal["Preferences", "People", "Projects", "Goals", "Context", "Beliefs", "Timeline"]
 WhenSource = Literal["explicit_in_content", "inferred_from_metadata", "ingest_time", "unknown"]
@@ -53,6 +53,10 @@ _KIND_ALIASES: dict[str, str] = {
     "news": "signal",
     "tweet": "signal",
     "link": "signal",
+    # unknown — reserved for the post-retry fallback path; the LLM should never
+    # emit this, but we accept it when ingest.py constructs a fallback
+    # ExtractionOutput after validation failed twice.
+    "unknown": "unknown",
 }
 
 
