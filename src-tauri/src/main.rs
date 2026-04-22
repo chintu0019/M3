@@ -28,17 +28,67 @@ const STARTUP_TIMEOUT_SECS: u64 = 25;
 struct M3Child(Mutex<Option<Child>>);
 
 fn find_m3_binary() -> Option<std::path::PathBuf> {
-    let candidates = [
-        "m3",                           // PATH (pipx, mise, venv activate)
+    // First, fast-path: honor `M3_BIN` if set (explicit override).
+    if let Ok(v) = std::env::var("M3_BIN") {
+        let p = std::path::PathBuf::from(v);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 1. $PATH and common system locations.
+    let direct = [
+        "m3",                           // $PATH (pipx, venv activate, etc.)
         "/opt/homebrew/bin/m3",         // Homebrew on Apple Silicon
         "/usr/local/bin/m3",            // Homebrew on Intel, pip --user
     ];
-    for name in candidates {
+    for name in direct {
         if let Ok(p) = which::which(name) {
             return Some(p);
         }
     }
+
+    // 2. User-local and toolchain-managed Python installs. Finder-launched
+    //    apps don't inherit the login shell PATH, so these paths are often
+    //    invisible to `which`. We check them explicitly.
+    let home = match dirs_like_home() {
+        Some(h) => h,
+        None => return None,
+    };
+
+    let fixed = [
+        home.join(".local/bin/m3"),              // pipx default, pip --user
+        home.join(".local/share/pipx/venvs/m3/bin/m3"),
+        home.join(".pyenv/shims/m3"),
+        home.join(".asdf/shims/m3"),
+        home.join("miniconda3/bin/m3"),
+        home.join("anaconda3/bin/m3"),
+    ];
+    for p in &fixed {
+        if p.exists() {
+            return Some(p.clone());
+        }
+    }
+
+    // 3. Glob the mise installs dir — version dirs vary.
+    //    ~/.local/share/mise/installs/python/*/bin/m3
+    let mise_root = home.join(".local/share/mise/installs/python");
+    if let Ok(entries) = std::fs::read_dir(&mise_root) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin/m3");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
     None
+}
+
+fn dirs_like_home() -> Option<std::path::PathBuf> {
+    // Tauri drags in `dirs` transitively; std::env::var("HOME") is sufficient
+    // and avoids an explicit dep.
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
 fn port_is_open(port: u16) -> bool {
