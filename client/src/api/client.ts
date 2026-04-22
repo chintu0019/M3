@@ -71,6 +71,33 @@ export interface ItemMeta {
 
 // --- methods ---
 
+async function* chatStream(message: string, history?: unknown[]) {
+  const res = await fetch(`${BASE}/api/v1/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, history }),
+  });
+  if (!res.ok || !res.body) throw new Error(`chat ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      if (line.startsWith("data: ")) {
+        const payload = line.slice(6);
+        if (payload === "[DONE]") return;
+        yield JSON.parse(payload);
+      }
+    }
+  }
+}
+
 export const api = {
   status: () => request<{ ok: boolean; brain_root: string }>("/api/v1/status"),
 
@@ -113,4 +140,6 @@ export const api = {
   item: (id: string) => request<ItemMeta>(`/api/v1/items/${id}`),
 
   itemOriginalUrl: (id: string) => `${BASE}/api/v1/items/${id}/original`,
+
+  chat: chatStream,
 };
