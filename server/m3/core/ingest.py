@@ -168,10 +168,22 @@ class Ingester:
             # 4. Record / signal routing
             if parsed.kind == "record" and parsed.structured_fields is not None:
                 sf = parsed.structured_fields
-                records_mod.write_record(self.brain_root, records_mod.Record(
-                    item_id=inp.item_id, amount=sf.amount, currency=sf.currency, vendor=sf.vendor,
-                    date=sf.date, category=sf.category, due_date=sf.due_date, reference_id=sf.reference_id,
-                ))
+                # StructuredFields is now fully optional at the schema level to tolerate
+                # partial LLM extractions. We still require amount/vendor/date before
+                # writing a Record — anything less isn't a usable record row.
+                if sf.amount is not None and sf.vendor and sf.date:
+                    records_mod.write_record(self.brain_root, records_mod.Record(
+                        item_id=inp.item_id, amount=sf.amount,
+                        currency=sf.currency or "USD", vendor=sf.vendor,
+                        date=sf.date, category=sf.category or "unknown",
+                        due_date=sf.due_date, reference_id=sf.reference_id,
+                    ))
+                else:
+                    logger.warning(
+                        "record item %s has incomplete structured_fields "
+                        "(amount=%s vendor=%s date=%s); skipping record write",
+                        item_id_str, sf.amount, sf.vendor, sf.date,
+                    )
             if parsed.kind == "signal" and parsed.signal is not None:
                 sig = parsed.signal
                 signals_mod.append_signal(self.brain_root, signals_mod.Signal(

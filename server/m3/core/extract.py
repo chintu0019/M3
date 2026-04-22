@@ -2,15 +2,58 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Kind = Literal["personal", "reference", "record", "signal"]
 Operation = Literal["append", "replace_section", "revise"]
 SelfSlot = Literal["Preferences", "People", "Projects", "Goals", "Context", "Beliefs", "Timeline"]
 WhenSource = Literal["explicit_in_content", "inferred_from_metadata", "ingest_time", "unknown"]
 StanceValue = Literal["positive", "negative", "uncertain", "neutral"]
+
+
+_CANONICAL_SLOTS: set[str] = {"Preferences", "People", "Projects", "Goals", "Context", "Beliefs", "Timeline"}
+
+_SLOT_ALIASES: dict[str, str] = {
+    "preference": "Preferences",
+    "preferences": "Preferences",
+    "person": "People",
+    "people": "People",
+    "project": "Projects",
+    "projects": "Projects",
+    "goal": "Goals",
+    "goals": "Goals",
+    "context": "Context",
+    "belief": "Beliefs",
+    "beliefs": "Beliefs",
+    "timeline": "Timeline",
+}
+
+_KIND_ALIASES: dict[str, str] = {
+    # personal
+    "personal": "personal",
+    "note": "personal",
+    "notes": "personal",
+    "thought": "personal",
+    "thoughts": "personal",
+    "journal": "personal",
+    # reference
+    "reference": "reference",
+    "article": "reference",
+    "paper": "reference",
+    "book": "reference",
+    # record
+    "record": "record",
+    "receipt": "record",
+    "bill": "record",
+    "invoice": "record",
+    # signal
+    "signal": "signal",
+    "news": "signal",
+    "tweet": "signal",
+    "link": "signal",
+}
 
 
 class When(BaseModel):
@@ -61,6 +104,22 @@ class SelfUpdate(BaseModel):
     change_summary: str
     cites: list[str] = Field(default_factory=list)
 
+    @field_validator("slot", mode="before")
+    @classmethod
+    def _coerce_slot(cls, value: Any) -> Any:
+        # Pydantic Literal validation is strict; normalise common casing / plural drifts
+        # from smaller models before the Literal check runs. Anything outside the known
+        # alias/canonical set raises — retry layer catches it.
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if stripped in _CANONICAL_SLOTS:
+            return stripped
+        mapped = _SLOT_ALIASES.get(stripped.lower())
+        if mapped is not None:
+            return mapped
+        raise ValueError(f"unknown self-update slot: {value!r}")
+
 
 class SectionUpdate(BaseModel):
     operation: Operation
@@ -78,13 +137,32 @@ class EntityUpdate(BaseModel):
     section_update: SectionUpdate | None = None
     related_entity_names: list[str] = Field(default_factory=list)
 
+    @field_validator("section_update", mode="before")
+    @classmethod
+    def _coerce_section_update(cls, value: Any) -> Any:
+        # Smaller models sometimes collapse section_update into a single prose string
+        # ("Added a history section") instead of the structured dict. Wrap it as an
+        # append op so we don't lose the content.
+        if isinstance(value, str):
+            return {
+                "operation": "append",
+                "section_heading": None,
+                "new_content": value,
+                "change_summary": "added narrative",
+            }
+        return value
+
 
 class StructuredFields(BaseModel):
-    amount: float
-    currency: str
-    vendor: str
-    date: str
-    category: str
+    # All fields optional: the LLM may classify something as a record but only pull
+    # a subset of the structured fields. ingest.py guards the records.write_record
+    # call on amount/vendor/date being present; partial records are dropped rather
+    # than crashing the whole ingest.
+    amount: float | None = None
+    currency: str | None = None
+    vendor: str | None = None
+    date: str | None = None
+    category: str | None = None
     due_date: str | None = None
     reference_id: str | None = None
 
@@ -103,6 +181,26 @@ class ExtractionOutput(BaseModel):
     entity_updates: list[EntityUpdate] = Field(default_factory=list)
     structured_fields: StructuredFields | None = None
     signal: SignalBlock | None = None
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _coerce_kind(cls, value: Any) -> Any:
+        # Map common synonyms from small models ("note" → "personal", "receipt" →
+        # "record", etc.) down to the four canonical kinds. Unknown values fall
+        # through and let the Literal check reject them.
+        if not isinstance(value, str):
+            return value
+        mapped = _KIND_ALIASES.get(value.strip().lower())
+        return mapped if mapped is not None else value
+
+    @field_validator("signal", mode="before")
+    @classmethod
+    def _coerce_signal(cls, value: Any) -> Any:
+        # Some models emit `signal` as a list of signal objects instead of a single
+        # object. Unwrap the first element; empty list becomes None.
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
 
 
 def process_item_tool_schema() -> dict:
