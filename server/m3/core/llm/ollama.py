@@ -24,7 +24,7 @@ class OllamaProvider(LLMProvider):
     supports_vision = False
     supports_audio = False
 
-    def __init__(self, host: str = "http://localhost:11434", model: str = "qwen2.5:14b") -> None:
+    def __init__(self, host: str = "http://localhost:11434", model: str = "qwen2.5:7b") -> None:
         self._host = host.rstrip("/")
         self._model = model
         self._client = httpx.AsyncClient(base_url=self._host, timeout=httpx.Timeout(120.0, read=120.0))

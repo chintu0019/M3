@@ -90,7 +90,7 @@ def _make_llm():
 
         return OllamaProvider(
             host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-            model=os.environ.get("OLLAMA_MODEL", "qwen2.5:14b"),
+            model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
         )
     if provider == "anthropic":
         from m3.core.llm.anthropic import AnthropicProvider
