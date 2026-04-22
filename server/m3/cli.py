@@ -173,6 +173,24 @@ def start(
     _run()
 
 
+@app.command()
+def telegram():
+    """Run the Telegram capture bot (long-poll).
+
+    Requires M3_TELEGRAM_TOKEN. Strongly recommend setting
+    M3_TELEGRAM_ALLOWED_CHATS to a comma-separated list of chat ids so
+    random people who find your bot can't write into your brain. If
+    M3_SERVER_URL is unset, defaults to http://127.0.0.1:7007 — make
+    sure `m3 start` is running there.
+    """
+    import asyncio as _asyncio
+    from m3.capture.telegram import run as _tg_run
+    try:
+        _asyncio.run(_tg_run())
+    except KeyboardInterrupt:
+        typer.echo("\ntelegram bot stopped")
+
+
 class _FakeLLM:
     supports_tools = True
     supports_vision = False

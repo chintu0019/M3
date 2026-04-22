@@ -1,13 +1,27 @@
-"""
-M3 Telegram Bot -- capture content from Telegram messages.
+"""M3 Telegram bot — captures messages + files and POSTs them to the local M3 server.
 
-Handles text, photos, documents, audio, voice, and video.
-Uses python-telegram-bot v21+ (async native).
+Architecture: the bot is a separate process (`m3 telegram`) that talks to the
+running `m3 start` HTTP API. No Postgres/MinIO/ARQ — capture is now one HTTP
+call per message, server-side handles the brain writes.
+
+Config via env:
+  M3_TELEGRAM_TOKEN         — bot API token from @BotFather (required)
+  M3_TELEGRAM_ALLOWED_CHATS — comma-separated chat IDs allowed to talk to the bot
+                              (strongly recommended; without it anyone who finds
+                              the bot's username can send content into your brain)
+  M3_SERVER_URL             — base URL of the running m3 server (default:
+                              http://127.0.0.1:7007)
 """
 
+from __future__ import annotations
+
+import asyncio
+import json
 import logging
-import uuid
+import os
+from typing import Any
 
+import httpx
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -17,24 +31,127 @@ from telegram.ext import (
     filters,
 )
 
-from m3.core.search import SearchEngine
-from m3.storage.models import RawItem
-
 logger = logging.getLogger("m3.telegram")
 
 
+DEFAULT_SERVER_URL = "http://127.0.0.1:7007"
+INGEST_TIMEOUT_SECS = 180.0   # LLM-backed ingest can be slow with Ollama
+CHAT_TIMEOUT_SECS = 180.0
+
+
+def _parse_allowed_chats(raw: str | None) -> frozenset[int]:
+    if not raw:
+        return frozenset()
+    out: set[int] = set()
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            out.add(int(piece))
+        except ValueError:
+            logger.warning("ignoring non-integer chat id in M3_TELEGRAM_ALLOWED_CHATS: %r", piece)
+    return frozenset(out)
+
+
+class M3ApiClient:
+    """Thin HTTP client for the M3 local server. Separate from the Telegram-framework
+    bits so it can be unit-tested without instantiating a real bot."""
+
+    def __init__(
+        self,
+        *,
+        server_url: str = DEFAULT_SERVER_URL,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.server_url = server_url.rstrip("/")
+        self._own_client = http_client is None
+        self._http = http_client or httpx.AsyncClient(
+            timeout=httpx.Timeout(CHAT_TIMEOUT_SECS, read=CHAT_TIMEOUT_SECS),
+        )
+
+    async def aclose(self) -> None:
+        if self._own_client:
+            await self._http.aclose()
+
+    async def ingest_text(self, text: str) -> dict[str, Any]:
+        r = await self._http.post(
+            f"{self.server_url}/api/v1/ingest/text",
+            json={"text": text, "source": "telegram"},
+            timeout=INGEST_TIMEOUT_SECS,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def ingest_file(self, *, filename: str, content: bytes, mime: str) -> dict[str, Any]:
+        files = {"file": (filename, content, mime)}
+        data = {"source": "telegram"}
+        r = await self._http.post(
+            f"{self.server_url}/api/v1/ingest/file",
+            files=files, data=data, timeout=INGEST_TIMEOUT_SECS,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def retrieve(self, query: str, k: int = 3) -> list[dict[str, Any]]:
+        r = await self._http.get(
+            f"{self.server_url}/api/v1/retrieve",
+            params={"q": query, "k": k}, timeout=30.0,
+        )
+        r.raise_for_status()
+        return r.json().get("hits", [])
+
+    async def chat(self, message: str) -> str:
+        """Stream the /api/v1/chat SSE response and return the final content."""
+        async with self._http.stream(
+            "POST", f"{self.server_url}/api/v1/chat",
+            json={"message": message}, timeout=CHAT_TIMEOUT_SECS,
+        ) as r:
+            r.raise_for_status()
+            final = ""
+            async for line in r.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    ev = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "final":
+                    final = ev.get("content") or ""
+                elif ev.get("type") == "error":
+                    return f"(agent error) {ev.get('content') or 'unknown'}"
+            return final or "(no answer)"
+
+    async def status(self) -> dict[str, Any]:
+        r = await self._http.get(f"{self.server_url}/api/v1/status", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def entity_count(self) -> int:
+        r = await self._http.get(f"{self.server_url}/api/v1/entities", timeout=15.0)
+        r.raise_for_status()
+        return len(r.json().get("entities", []))
+
+
 class TelegramCapture:
-    """Telegram bot that captures messages and sends them to M3 for processing."""
+    """Long-poll Telegram bot that forwards messages to the M3 HTTP API."""
 
-    def __init__(self, bot_token: str):
+    def __init__(
+        self,
+        *,
+        bot_token: str,
+        server_url: str = DEFAULT_SERVER_URL,
+        allowed_chats: frozenset[int] = frozenset(),
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
         self.app = Application.builder().token(bot_token).build()
-        self.db = None
-        self.files = None
-        self.arq_pool = None
-        self.search_engine: SearchEngine | None = None
-        self.llm = None
+        self.api = M3ApiClient(server_url=server_url, http_client=http_client)
+        self.server_url = self.api.server_url
+        self.allowed_chats = allowed_chats
 
-        # Register handlers
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
         self.app.add_handler(CommandHandler("search", self.cmd_search))
@@ -46,196 +163,209 @@ class TelegramCapture:
         self.app.add_handler(MessageHandler(filters.VIDEO, self.handle_video))
 
     async def start(self) -> None:
-        """Start the bot in polling mode."""
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()
-        logger.info("Telegram bot started")
+        logger.info(
+            "Telegram bot polling (server=%s, allowlist=%s)",
+            self.server_url,
+            ",".join(str(c) for c in sorted(self.allowed_chats)) or "(open)",
+        )
 
     async def stop(self) -> None:
-        """Stop the bot."""
         if self.app.updater.running:
             await self.app.updater.stop()
         if self.app.running:
             await self.app.stop()
         await self.app.shutdown()
-        logger.info("Telegram bot stopped")
+        await self.api.aclose()
 
-    async def _create_item(
-        self,
-        content_text: str | None,
-        content_type: str,
-        file_path: str | None = None,
-    ) -> uuid.UUID:
-        """Create a raw item and enqueue processing."""
-        item_id = uuid.uuid4()
-        async with self.db() as session:
-            item = RawItem(
-                id=item_id,
-                content_text=content_text,
-                content_type=content_type,
-                source_channel="telegram",
-                file_path=file_path,
-            )
-            session.add(item)
-            await session.commit()
+    # --- guards ---
 
-        if self.arq_pool:
-            await self.arq_pool.enqueue_job("process_item", str(item_id))
+    def _chat_is_allowed(self, update: Update) -> bool:
+        if not self.allowed_chats:
+            return True   # no allowlist configured; open bot (NOT recommended)
+        chat = update.effective_chat
+        return bool(chat and chat.id in self.allowed_chats)
 
-        return item_id
+    async def _reject(self, update: Update) -> None:
+        await update.message.reply_text(
+            "Sorry — this M3 instance doesn't accept messages from this chat. "
+            "Add your chat id to M3_TELEGRAM_ALLOWED_CHATS."
+        )
 
-    async def _download_and_store(
-        self, file_id: str, filename: str, context: ContextTypes.DEFAULT_TYPE
-    ) -> tuple[str, bytes]:
-        """Download a Telegram file and store in MinIO."""
-        tg_file = await context.bot.get_file(file_id)
-        file_bytes = await tg_file.download_as_bytearray()
-        file_bytes = bytes(file_bytes)
-
-        item_id = uuid.uuid4()
-        path = f"raw/{item_id}/{filename}"
-        await self.files.upload(path, file_bytes)
-        return path, file_bytes
-
-    # --- Command handlers ---
+    # --- commands ---
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
         await update.message.reply_text(
-            "Welcome to M3. Send me anything -- text, photos, documents, voice notes -- "
-            "and I'll organize it into your knowledge base.\n\n"
+            "Welcome to M3. Send me anything — text, photos, documents, voice notes — "
+            "and I'll route it into your brain.\n\n"
             "Commands:\n"
-            "/status - System status\n"
-            "/search <query> - Search your wiki\n"
-            "/ask <question> - Ask your wiki a question"
+            "/status  — server + brain summary\n"
+            "/search <query>  — top 3 matching items\n"
+            "/ask <question>  — agent answer grounded in your brain"
         )
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        from sqlalchemy import func, select
-        from m3.storage.models import Entity
-
-        async with self.db() as session:
-            pending = (await session.execute(
-                select(func.count(RawItem.id)).where(RawItem.status == "pending")
-            )).scalar() or 0
-            total_items = (await session.execute(
-                select(func.count(RawItem.id))
-            )).scalar() or 0
-            total_entities = (await session.execute(
-                select(func.count(Entity.id))
-            )).scalar() or 0
-
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
+        try:
+            status, entity_count = await asyncio.gather(self.api.status(), self.api.entity_count())
+        except Exception as e:
+            return await update.message.reply_text(f"M3 server unreachable: {e}")
         await update.message.reply_text(
-            f"M3 Status:\n"
-            f"  Items: {total_items} total, {pending} pending\n"
-            f"  Entities: {total_entities}"
+            f"M3 server: ok\n"
+            f"brain: {status.get('brain_root')}\n"
+            f"entities: {entity_count}"
         )
 
     async def cmd_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
         query = " ".join(context.args) if context.args else ""
         if not query:
-            await update.message.reply_text("Usage: /search <query>")
-            return
-
-        if not self.search_engine:
-            await update.message.reply_text("Search not available yet.")
-            return
-
-        results = await self.search_engine.search(query, limit=3)
-        if not results:
-            await update.message.reply_text("No results found.")
-            return
-
-        lines = []
-        for r in results:
-            lines.append(f"*{r.canonical_name}* ({r.entity_type})")
-            lines.append(f"{r.snippet[:200]}")
-            lines.append("")
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            return await update.message.reply_text("Usage: /search <query>")
+        try:
+            hits = await self.api.retrieve(query, k=3)
+        except Exception as e:
+            return await update.message.reply_text(f"search failed: {e}")
+        if not hits:
+            return await update.message.reply_text("No hits.")
+        lines: list[str] = []
+        for h in hits:
+            when = h.get("when_iso") or "----"
+            excerpt = (h.get("excerpt") or h.get("snippet") or "")[:200]
+            lines.append(f"[{when}] {excerpt}")
+        await update.message.reply_text("\n\n".join(lines))
 
     async def cmd_ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
         question = " ".join(context.args) if context.args else ""
         if not question:
-            await update.message.reply_text("Usage: /ask <question>")
-            return
+            return await update.message.reply_text("Usage: /ask <question>")
+        placeholder = await update.message.reply_text("Thinking…")
+        try:
+            answer = await self.api.chat(question)
+        except Exception as e:
+            answer = f"(agent failed) {e}"
+        # Telegram hard-limits messages to 4096 chars. Truncate if necessary.
+        await placeholder.edit_text(_truncate(answer, 4000))
 
-        if not self.search_engine or not self.llm:
-            await update.message.reply_text("Chat not available yet.")
-            return
-
-        results = await self.search_engine.search(question, limit=5)
-        context_parts = []
-        async with self.db() as session:
-            for r in results:
-                from m3.storage.models import Entity
-                entity = await session.get(Entity, r.entity_id)
-                if entity:
-                    body = entity.page_content or entity.page_overview or entity.description or ""
-                    context_parts.append(
-                        f"### {entity.canonical_name} ({entity.entity_type})\n{body[:2000]}"
-                    )
-
-        context_block = "\n\n---\n\n".join(context_parts) if context_parts else "(No relevant entities)"
-
-        system = f"""You are M3, a personal knowledge assistant. Answer based on the entity context below.
-Be concise -- this is a Telegram message.
-
-Context:
-{context_block}"""
-
-        response = await self.llm.complete(
-            messages=[{"role": "user", "content": question}],
-            system=system,
-            max_tokens=1000,
-            temperature=0.5,
-        )
-
-        await update.message.reply_text(response)
-
-    # --- Message handlers ---
+    # --- media handlers ---
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        text = update.message.text
-        await self._create_item(content_text=text, content_type="text")
-        await update.message.reply_text("Got it. Processing...")
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
+        text = update.message.text or ""
+        if not text.strip():
+            return
+        placeholder = await update.message.reply_text("Ingesting…")
+        try:
+            out = await self.api.ingest_text(text)
+            summary = _format_ingest_summary(out)
+        except Exception as e:
+            summary = f"ingest failed: {e}"
+        await placeholder.edit_text(summary)
 
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        photo = update.message.photo[-1]  # Highest resolution
-        path, _ = await self._download_and_store(
-            photo.file_id, f"photo_{photo.file_unique_id}.jpg", context
-        )
-        caption = update.message.caption or ""
-        await self._create_item(content_text=caption, content_type="image", file_path=path)
-        await update.message.reply_text("Photo received. Processing...")
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
+        photo = update.message.photo[-1]
+        filename = f"photo_{photo.file_unique_id}.jpg"
+        content = await _download(context, photo.file_id)
+        placeholder = await update.message.reply_text("Ingesting photo…")
+        try:
+            out = await self.api.ingest_file(filename=filename, content=content, mime="image/jpeg")
+            summary = _format_ingest_summary(out)
+        except Exception as e:
+            summary = f"ingest failed: {e}"
+        await placeholder.edit_text(summary)
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
         doc = update.message.document
         filename = doc.file_name or f"doc_{doc.file_unique_id}"
-        path, _ = await self._download_and_store(doc.file_id, filename, context)
-
-        content_type = "file"
-        if filename.lower().endswith(".pdf"):
-            content_type = "pdf"
-
-        caption = update.message.caption or ""
-        await self._create_item(content_text=caption, content_type=content_type, file_path=path)
-        await update.message.reply_text(f"Document '{filename}' received. Processing...")
+        content = await _download(context, doc.file_id)
+        placeholder = await update.message.reply_text(f"Ingesting {filename}…")
+        mime = doc.mime_type or "application/octet-stream"
+        try:
+            out = await self.api.ingest_file(filename=filename, content=content, mime=mime)
+            summary = _format_ingest_summary(out)
+        except Exception as e:
+            summary = f"ingest failed: {e}"
+        await placeholder.edit_text(summary)
 
     async def handle_audio(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
         audio = update.message.voice or update.message.audio
         ext = "ogg" if update.message.voice else "mp3"
-        path, _ = await self._download_and_store(
-            audio.file_id, f"audio_{audio.file_unique_id}.{ext}", context
-        )
-        await self._create_item(content_text=None, content_type="audio", file_path=path)
-        await update.message.reply_text("Audio received. Processing...")
+        filename = f"audio_{audio.file_unique_id}.{ext}"
+        mime = "audio/ogg" if update.message.voice else "audio/mpeg"
+        content = await _download(context, audio.file_id)
+        placeholder = await update.message.reply_text("Ingesting audio…")
+        try:
+            out = await self.api.ingest_file(filename=filename, content=content, mime=mime)
+            summary = _format_ingest_summary(out)
+        except Exception as e:
+            summary = f"ingest failed: {e}"
+        await placeholder.edit_text(summary)
 
     async def handle_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._chat_is_allowed(update):
+            return await self._reject(update)
         video = update.message.video
-        path, _ = await self._download_and_store(
-            video.file_id, f"video_{video.file_unique_id}.mp4", context
+        filename = f"video_{video.file_unique_id}.mp4"
+        content = await _download(context, video.file_id)
+        placeholder = await update.message.reply_text("Ingesting video…")
+        try:
+            out = await self.api.ingest_file(filename=filename, content=content, mime="video/mp4")
+            summary = _format_ingest_summary(out)
+        except Exception as e:
+            summary = f"ingest failed: {e}"
+        await placeholder.edit_text(summary)
+
+
+async def _download(context: ContextTypes.DEFAULT_TYPE, file_id: str) -> bytes:
+    tg_file = await context.bot.get_file(file_id)
+    return bytes(await tg_file.download_as_bytearray())
+
+
+def _truncate(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _format_ingest_summary(out: dict[str, Any]) -> str:
+    kind = out.get("kind") or "?"
+    conf = out.get("confidence") or 0.0
+    ents = ", ".join(out.get("entities_touched") or []) or "—"
+    qs = out.get("questions_raised") or 0
+    q_marker = f" · {qs} open question{'s' if qs != 1 else ''}" if qs else ""
+    return f"✓ {kind} (conf {conf:.2f})\nentities: {ents}{q_marker}"
+
+
+def build_from_env() -> TelegramCapture:
+    """Read env vars and build a TelegramCapture. Raises if the token is unset."""
+    token = os.environ.get("M3_TELEGRAM_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "M3_TELEGRAM_TOKEN is required. Create a bot via @BotFather and export the token."
         )
-        caption = update.message.caption or ""
-        await self._create_item(content_text=caption, content_type="video", file_path=path)
-        await update.message.reply_text("Video received. Processing...")
+    server = os.environ.get("M3_SERVER_URL", DEFAULT_SERVER_URL)
+    allowed = _parse_allowed_chats(os.environ.get("M3_TELEGRAM_ALLOWED_CHATS"))
+    return TelegramCapture(bot_token=token, server_url=server, allowed_chats=allowed)
+
+
+async def run() -> None:
+    """Entrypoint for `m3 telegram` — polls until Ctrl+C."""
+    cap = build_from_env()
+    await cap.start()
+    try:
+        stop_event = asyncio.Event()
+        await stop_event.wait()
+    finally:
+        await cap.stop()
