@@ -47,8 +47,18 @@ class TelegramConfig:
 
 
 @dataclass
+class LLMConfig:
+    provider: str | None = None         # "ollama" | "anthropic" | None (= env-driven default)
+    ollama_host: str | None = None
+    ollama_model: str | None = None
+    anthropic_api_key: str | None = None
+    anthropic_model: str | None = None
+
+
+@dataclass
 class M3Config:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,7 +67,18 @@ class M3Config:
                 "allowed_chats": list(self.telegram.allowed_chats),
                 "server_url": self.telegram.server_url,
             },
+            "llm": {
+                "provider": self.llm.provider,
+                "ollama_host": self.llm.ollama_host,
+                "ollama_model": self.llm.ollama_model,
+                "anthropic_api_key": self.llm.anthropic_api_key,
+                "anthropic_model": self.llm.anthropic_model,
+            },
         }
+
+
+def _str_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def load() -> M3Config:
@@ -70,7 +91,11 @@ def load() -> M3Config:
     except yaml.YAMLError:
         # Don't crash on malformed config — behave as if absent.
         return M3Config()
-    tg = (raw.get("telegram") or {}) if isinstance(raw, dict) else {}
+    if not isinstance(raw, dict):
+        return M3Config()
+    tg = raw.get("telegram") or {}
+    if not isinstance(tg, dict):
+        tg = {}
     allowed = tg.get("allowed_chats") or []
     # Coerce each allowlist entry to int; skip anything that doesn't parse.
     allowed_ints: list[int] = []
@@ -79,11 +104,21 @@ def load() -> M3Config:
             allowed_ints.append(int(v))
         except (TypeError, ValueError):
             continue
+    llm_raw = raw.get("llm") or {}
+    if not isinstance(llm_raw, dict):
+        llm_raw = {}
     return M3Config(
         telegram=TelegramConfig(
-            token=(tg.get("token") or None) if isinstance(tg.get("token"), str) else None,
+            token=_str_or_none(tg.get("token")),
             allowed_chats=allowed_ints,
-            server_url=(tg.get("server_url") or None) if isinstance(tg.get("server_url"), str) else None,
+            server_url=_str_or_none(tg.get("server_url")),
+        ),
+        llm=LLMConfig(
+            provider=_str_or_none(llm_raw.get("provider")),
+            ollama_host=_str_or_none(llm_raw.get("ollama_host")),
+            ollama_model=_str_or_none(llm_raw.get("ollama_model")),
+            anthropic_api_key=_str_or_none(llm_raw.get("anthropic_api_key")),
+            anthropic_model=_str_or_none(llm_raw.get("anthropic_model")),
         ),
     )
 
@@ -145,4 +180,28 @@ def telegram_server_url() -> str:
         os.environ.get("M3_SERVER_URL")
         or load().telegram.server_url
         or "http://127.0.0.1:7007"
+    )
+
+
+def llm_provider() -> str:
+    return os.environ.get("M3_LLM_PROVIDER") or load().llm.provider or "ollama"
+
+
+def ollama_host() -> str:
+    return os.environ.get("OLLAMA_HOST") or load().llm.ollama_host or "http://localhost:11434"
+
+
+def ollama_model() -> str:
+    return os.environ.get("OLLAMA_MODEL") or load().llm.ollama_model or "qwen2.5:7b"
+
+
+def anthropic_api_key() -> str | None:
+    return os.environ.get("ANTHROPIC_API_KEY") or load().llm.anthropic_api_key or None
+
+
+def anthropic_model() -> str:
+    return (
+        os.environ.get("ANTHROPIC_MODEL")
+        or load().llm.anthropic_model
+        or "claude-sonnet-4-20250514"
     )

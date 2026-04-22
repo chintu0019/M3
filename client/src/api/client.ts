@@ -69,6 +69,15 @@ export interface ItemMeta {
   confidence: number;
 }
 
+export interface LLMSettings {
+  provider: string;
+  ollama_host: string;
+  ollama_model: string;
+  anthropic_model: string;
+  anthropic_api_key_present: boolean;
+  env_overrides: string[];
+}
+
 // --- methods ---
 
 async function* chatStream(message: string, history?: unknown[]) {
@@ -140,6 +149,14 @@ export const api = {
   item: (id: string) => request<ItemMeta>(`/api/v1/items/${id}`),
 
   itemOriginalUrl: (id: string) => `${BASE}/api/v1/items/${id}/original`,
+
+  settings: () => request<LLMSettings>("/api/v1/settings"),
+
+  updateSettings: (update: Partial<LLMSettings> & { anthropic_api_key?: string; clear_anthropic_api_key?: boolean }) =>
+    request<LLMSettings>("/api/v1/settings", {
+      method: "PUT",
+      body: JSON.stringify(update),
+    }),
 
   chat: chatStream,
 };

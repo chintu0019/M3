@@ -24,6 +24,7 @@ from m3.api.items import build_items_router
 from m3.api.questions import build_questions_router
 from m3.api.retrieve import build_retrieve_router
 from m3.api.self_doc import build_self_router
+from m3.api.settings import build_settings_router
 
 logger = logging.getLogger("m3.app")
 
@@ -48,6 +49,7 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     app.include_router(build_questions_router(brain_root=brain_root))
     app.include_router(build_items_router(brain_root=brain_root))
     app.include_router(build_chat_router(brain_root=brain_root, embedder=embedder, llm_factory=llm_factory))
+    app.include_router(build_settings_router())
 
     @app.get("/api/v1/status")
     async def status():
@@ -83,23 +85,23 @@ def _make_embedder():
 
 
 def _make_llm():
-    """Pick an LLM provider from M3_LLM_PROVIDER. Supports: ollama | anthropic."""
-    provider = os.environ.get("M3_LLM_PROVIDER", "ollama").lower()
+    """Pick an LLM provider from config (env > config.yml > default).
+
+    Called per-request via llm_factory, so a change to config.yml or env takes
+    effect on the NEXT incoming request with no server restart needed.
+    """
+    from m3.core import config as _cfg
+    provider = _cfg.llm_provider().lower()
     if provider == "ollama":
         from m3.core.llm.ollama import OllamaProvider
-
-        return OllamaProvider(
-            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-            model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
-        )
+        return OllamaProvider(host=_cfg.ollama_host(), model=_cfg.ollama_model())
     if provider == "anthropic":
+        key = _cfg.anthropic_api_key()
+        if not key:
+            raise RuntimeError("anthropic provider selected but no API key configured")
         from m3.core.llm.anthropic import AnthropicProvider
-
-        return AnthropicProvider(
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-        )
-    raise RuntimeError(f"unknown M3_LLM_PROVIDER: {provider!r}")
+        return AnthropicProvider(api_key=key, model=_cfg.anthropic_model())
+    raise RuntimeError(f"unknown LLM provider: {provider!r}")
 
 
 def run() -> None:

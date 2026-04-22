@@ -84,25 +84,26 @@ def _guess_content_type(path: Path) -> str:
 
 
 def _make_llm():
-    """Pick an LLM provider from M3_LLM_PROVIDER. Supports: ollama | anthropic | fake."""
-    provider = os.environ.get("M3_LLM_PROVIDER", "ollama").lower()
-    if provider == "fake":
+    """Pick an LLM provider from config (env > config.yml > default).
+
+    Supports: ollama | anthropic | fake. The `fake` provider is only selected
+    via M3_LLM_PROVIDER=fake and is used by smoke tests.
+    """
+    from m3.core import config as _cfg
+    # `fake` is env-only (never persisted to config.yml).
+    if os.environ.get("M3_LLM_PROVIDER", "").lower() == "fake":
         return _FakeLLM()
+    provider = _cfg.llm_provider().lower()
     if provider == "ollama":
         from m3.core.llm.ollama import OllamaProvider
-
-        return OllamaProvider(
-            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-            model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
-        )
+        return OllamaProvider(host=_cfg.ollama_host(), model=_cfg.ollama_model())
     if provider == "anthropic":
+        key = _cfg.anthropic_api_key()
+        if not key:
+            raise typer.BadParameter("anthropic provider selected but no API key configured")
         from m3.core.llm.anthropic import AnthropicProvider
-
-        return AnthropicProvider(
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-        )
-    raise typer.BadParameter(f"unknown M3_LLM_PROVIDER: {provider!r}")
+        return AnthropicProvider(api_key=key, model=_cfg.anthropic_model())
+    raise typer.BadParameter(f"unknown LLM provider: {provider!r}")
 
 
 def _make_embedder():

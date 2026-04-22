@@ -11,7 +11,11 @@ from m3.core import config as cfg
 def tmp_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(cfg.CONFIG_DIR_ENV, str(tmp_path / "m3cfg"))
     # Clear env vars that would otherwise override in these tests.
-    for key in ("M3_TELEGRAM_TOKEN", "M3_TELEGRAM_ALLOWED_CHATS", "M3_SERVER_URL"):
+    for key in (
+        "M3_TELEGRAM_TOKEN", "M3_TELEGRAM_ALLOWED_CHATS", "M3_SERVER_URL",
+        "M3_LLM_PROVIDER", "OLLAMA_HOST", "OLLAMA_MODEL",
+        "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+    ):
         monkeypatch.delenv(key, raising=False)
     yield
 
@@ -98,3 +102,25 @@ def test_load_coerces_allowed_chats_to_int():
     c = cfg.load()
     # '42' coerces; 'not-a-number' dropped; 7 passes through
     assert c.telegram.allowed_chats == [42, 7]
+
+
+def test_llm_config_roundtrip():
+    c = cfg.M3Config()
+    c.llm.provider = "anthropic"
+    c.llm.anthropic_api_key = "sk-test"
+    c.llm.anthropic_model = "claude-opus-4"
+    cfg.save(c)
+    loaded = cfg.load()
+    assert loaded.llm.provider == "anthropic"
+    assert loaded.llm.anthropic_api_key == "sk-test"
+    assert loaded.llm.anthropic_model == "claude-opus-4"
+
+
+def test_llm_config_env_overrides(monkeypatch):
+    cfg.save(cfg.M3Config(llm=cfg.LLMConfig(provider="ollama", ollama_model="llama3")))
+    assert cfg.llm_provider() == "ollama"
+    assert cfg.ollama_model() == "llama3"
+    monkeypatch.setenv("M3_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:72b")
+    assert cfg.llm_provider() == "anthropic"
+    assert cfg.ollama_model() == "qwen2.5:72b"
