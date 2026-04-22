@@ -57,8 +57,8 @@ def _default_brain() -> Path:
 
 
 def _make_embedder():
-    from m3.core.llm.embeddings import FastembedEmbeddingProvider
-    return FastembedEmbeddingProvider()
+    from m3.core.llm.embeddings import FastEmbedProvider
+    return FastEmbedProvider()
 
 
 def _make_llm():
