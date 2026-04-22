@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from m3.api.chat import build_chat_router
 from m3.api.entities_new import build_entities_router
 from m3.api.ingest_http import build_ingest_router
 from m3.api.items import build_items_router
@@ -46,6 +47,7 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     app.include_router(build_entities_router(brain_root=brain_root))
     app.include_router(build_questions_router(brain_root=brain_root))
     app.include_router(build_items_router(brain_root=brain_root))
+    app.include_router(build_chat_router(brain_root=brain_root, embedder=embedder, llm_factory=llm_factory))
 
     @app.get("/api/v1/status")
     async def status():
