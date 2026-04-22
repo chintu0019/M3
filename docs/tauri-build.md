@@ -29,10 +29,12 @@ cargo tauri build
 ```
 
 Outputs:
-- macOS: `src-tauri/target/release/bundle/macos/M3.app` and `src-tauri/target/release/bundle/dmg/M3_0.1.0_<arch>.dmg`
+- macOS: `src-tauri/target/release/bundle/macos/M3.app`
 - Linux: `src-tauri/target/release/bundle/deb/m3-app_0.1.0_amd64.deb` and `src-tauri/target/release/bundle/appimage/m3-app_0.1.0_amd64.AppImage`
 
 First build is ~10–20 minutes (downloading and compiling 400+ Rust crates). Incremental rebuilds are seconds.
+
+**DMG target intentionally disabled.** Tauri's `bundle_dmg.sh` (bundled as the create-dmg fork) frequently fails on recent macOS with `hdiutil: create failed - No space left on device` — a misleading error caused by an undersized scratch image, not actual disk pressure. The `.app` is the real deliverable; to distribute, zip it (`ditto -ck --keepParent M3.app M3.app.zip`) or build the DMG separately with a fresh `create-dmg` install (`brew install create-dmg && create-dmg M3_0.1.0.dmg M3.app`). Flip `targets` in `tauri.conf.json` back to include `"dmg"` if you want Tauri to try again.
 
 ## How it works
 
