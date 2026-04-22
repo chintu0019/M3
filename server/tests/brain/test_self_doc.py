@@ -49,6 +49,17 @@ def test_apply_unknown_slot_raises(tmp_brain: Path):
         apply_update(tmp_brain, slot="NotASlot", operation="append", new_content="x", heading=None)
 
 
-def test_apply_replace_section_missing_heading_raises(tmp_brain: Path):
-    with pytest.raises(SelfDocError):
-        apply_update(tmp_brain, slot="People", operation="replace_section", new_content="x", heading="### Nobody")
+def test_apply_replace_section_missing_heading_falls_back_to_append(tmp_brain: Path):
+    # LLMs get this wrong often enough that graceful fallback beats a strict crash.
+    apply_update(tmp_brain, slot="People", operation="replace_section", new_content="x", heading="### Nobody")
+    assert "x" in read_section(tmp_brain, "People")
+
+
+def test_apply_replace_section_with_heading_equal_to_slot_replaces_whole_slot(tmp_brain: Path):
+    # Another common LLM confusion: heading='Preferences' when slot='Preferences'.
+    apply_update(tmp_brain, slot="Preferences", operation="append", new_content="first line", heading=None)
+    apply_update(tmp_brain, slot="Preferences", operation="replace_section",
+                 new_content="replaced body", heading="Preferences")
+    body = read_section(tmp_brain, "Preferences")
+    assert body == "replaced body"
+    assert "first line" not in body

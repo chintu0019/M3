@@ -69,14 +69,30 @@ def apply_update(
     prior = slots.get(slot, _EMPTY_PLACEHOLDER)
     current = "" if prior == _EMPTY_PLACEHOLDER else prior
 
+    # LLMs occasionally emit heading equal to the slot name (e.g. slot="Preferences",
+    # heading="Preferences" or "## Preferences"), meaning "replace the whole slot body".
+    # Normalize to that intent by falling back to an append (on empty) or full-body
+    # replace (on non-empty) rather than searching for a subsection that cannot exist.
+    if heading is not None:
+        normalized_heading = heading.strip().lstrip("#").strip().lower()
+        if normalized_heading == slot.lower():
+            heading = None
+            if operation in {"replace_section", "revise"}:
+                slots[slot] = new_content.strip()
+                p.self_md.write_text(_reassemble(header, slots))
+                return prior
+
     if operation == "append":
         slots[slot] = (current + "\n\n" + new_content.strip()).strip() if current else new_content.strip()
     elif operation in {"replace_section", "revise"}:
         if not heading:
             raise SelfDocError(f"{operation} requires a heading")
         if heading not in current:
-            raise SelfDocError(f"heading {heading!r} not found in slot {slot!r}")
-        slots[slot] = _replace_subsection(current, heading, new_content.strip())
+            # Graceful fallback: heading not found, append the new content
+            # instead of crashing the whole ingest.
+            slots[slot] = (current + "\n\n" + new_content.strip()).strip() if current else new_content.strip()
+        else:
+            slots[slot] = _replace_subsection(current, heading, new_content.strip())
 
     p.self_md.write_text(_reassemble(header, slots))
     return prior
