@@ -157,6 +157,22 @@ def reindex(
             typer.echo(f"  error: {e}", err=True)
 
 
+@app.command()
+def start(
+    brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    port: int = typer.Option(7007, "--port", help="Bind port."),
+):
+    """Start the local M3 server."""
+    import os as _os
+    if brain:
+        _os.environ["M3_BRAIN"] = str(brain)
+    _os.environ["M3_HOST"] = host
+    _os.environ["M3_PORT"] = str(port)
+    from m3.app import run as _run
+    _run()
+
+
 class _FakeLLM:
     supports_tools = True
     supports_vision = False

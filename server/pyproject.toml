@@ -42,8 +42,7 @@ dev = [
 ]
 
 [project.scripts]
-m3-server = "m3.main:run"
-m3-worker = "m3.workers.run:main"
+m3-server = "m3.app:run"
 m3 = "m3.cli:app"
 
 [build-system]

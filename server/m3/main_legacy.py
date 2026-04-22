@@ -1,6 +1,4 @@
-"""
-M3 Server — FastAPI application with lifespan management.
-"""
+"""Legacy M3 entrypoint — retained for reference only. Replaced by m3.app:run in P3a."""
 
 import logging
 from contextlib import asynccontextmanager
