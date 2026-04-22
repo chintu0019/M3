@@ -12,6 +12,7 @@ Sequence:
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import subprocess
 import uuid
@@ -19,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
+
+from pydantic import ValidationError
 
 from m3.brain import (
     changelog,
@@ -39,6 +42,44 @@ from m3.core.extract import (
 from m3.core.llm import LLMProvider, Tool
 
 logger = logging.getLogger("m3.ingest")
+
+
+MAX_EXTRACTION_RETRIES = 1   # total attempts = 1 + retries
+
+
+def _short(exc: Exception, max_chars: int = 400) -> str:
+    s = str(exc)
+    return s if len(s) <= max_chars else s[:max_chars] + "…"
+
+
+def _safe_json(data: dict | None, max_chars: int = 1500) -> str:
+    if not data:
+        return "{}"
+    try:
+        s = _json.dumps(data, default=str, indent=2)
+    except (TypeError, ValueError):
+        s = str(data)
+    return s if len(s) <= max_chars else s[:max_chars] + "…"
+
+
+def _repair_message(exc: ValidationError) -> str:
+    """Craft a compact corrective prompt from a Pydantic ValidationError."""
+    errors = exc.errors()
+    lines = []
+    for err in errors[:10]:
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "validation error")
+        lines.append(f"  - {loc}: {msg}")
+    joined = "\n".join(lines)
+    return (
+        "Your previous tool call output did not match the process_item schema. "
+        "These fields failed validation:\n"
+        f"{joined}\n\n"
+        "Call process_item AGAIN with a corrected payload. Same rules apply: "
+        "no hallucination, diff-aware updates, classify into one of "
+        "personal | reference | record | signal. Fix only the listed fields; "
+        "keep everything else the same."
+    )
 
 
 class _Embedder(Protocol):
@@ -102,12 +143,34 @@ class Ingester:
                 description="Emit M3's structured extraction for this item.",
                 input_schema=process_item_tool_schema(),
             )
-            result = await self.llm.complete_tool(
-                messages=[{"role": "user", "content": user_msg}],
-                tools=[tool], system=system, tool_choice="process_item",
-                max_tokens=8192, temperature=0.2,
-            )
-            parsed = ExtractionOutput.model_validate(result.input or {})
+            async def _extract_with_retry() -> ExtractionOutput:
+                last_err: Exception | None = None
+                last_raw: dict | None = None
+                attempt_messages: list = [{"role": "user", "content": user_msg}]
+                for attempt in range(MAX_EXTRACTION_RETRIES + 1):
+                    result = await self.llm.complete_tool(
+                        messages=attempt_messages, tools=[tool], system=system,
+                        tool_choice="process_item", max_tokens=8192, temperature=0.2,
+                    )
+                    try:
+                        return ExtractionOutput.model_validate(result.input or {})
+                    except ValidationError as e:
+                        last_err = e
+                        last_raw = result.input or {}
+                        if attempt >= MAX_EXTRACTION_RETRIES:
+                            break
+                        logger.warning(
+                            "ingest %s: extraction validation failed on attempt %d: %s",
+                            item_id_str, attempt + 1, _short(e),
+                        )
+                        attempt_messages = attempt_messages + [
+                            {"role": "assistant", "content": f"<attempted output>\n{_safe_json(last_raw)}\n</attempted output>"},
+                            {"role": "user", "content": _repair_message(e)},
+                        ]
+                assert last_err is not None
+                raise last_err
+
+            parsed = await _extract_with_retry()
 
             # 1. Meta
             items_mod.write_meta(self.brain_root, items_mod.ItemMeta(

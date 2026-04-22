@@ -129,19 +129,31 @@ async def test_ingest_commits_to_git(ingester, fake_llm, tmp_brain: Path):
 
 
 @pytest.mark.asyncio
-async def test_ingest_rolls_back_on_failure(ingester, fake_llm, tmp_brain: Path):
+async def test_ingest_rolls_back_on_failure(ingester, tmp_brain: Path):
     """A malformed LLM payload must not leave half-written files in the brain."""
     import subprocess
 
     item_id = uuid.UUID("aaaaaaaa-cccc-bbbb-dddd-eeeeeeeeeeee")
-    # `kind="weirdo"` is not a valid Kind; Pydantic validation should raise.
-    fake_llm.set_response("rollback test", {
-        "kind": "weirdo",
-        "interpretation": {
-            "what_happened": "", "when": {"iso": None, "source": "unknown"}, "confidence": 0.0,
-        },
-        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
-    })
+
+    # Use an LLM that always emits an invalid `kind`, so both the initial
+    # attempt and the corrective retry fail validation and the original
+    # ValidationError propagates into the ingest rollback.
+    class _AlwaysInvalidKindLLM:
+        supports_tools = True
+        supports_vision = False
+        supports_audio = False
+
+        async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
+            from m3.core.llm.base import ToolResult
+            return ToolResult(tool_name=tool_choice or "process_item", input={
+                "kind": "weirdo",
+                "interpretation": {
+                    "what_happened": "", "when": {"iso": None, "source": "unknown"}, "confidence": 0.0,
+                },
+                "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+            })
+
+    ingester.llm = _AlwaysInvalidKindLLM()
     with pytest.raises(Exception):
         await ingester.ingest(IngestInput(
             item_id=item_id, source="cli",
@@ -160,6 +172,62 @@ async def test_ingest_rolls_back_on_failure(ingester, fake_llm, tmp_brain: Path)
         ["git", "status", "--porcelain"], cwd=tmp_brain, check=True, capture_output=True, text=True,
     ).stdout
     assert status == "", f"expected clean tree, got: {status!r}"
+
+
+@pytest.mark.asyncio
+async def test_extraction_retries_once_on_validation_failure(ingester, fake_llm, tmp_brain):
+    import uuid as _uuid
+    item_id = _uuid.UUID("dddd0000-0000-0000-0000-000000000001")
+    call_count = {"n": 0}
+
+    class _BadFirstLLM:
+        supports_tools = True
+        supports_vision = False
+        supports_audio = False
+
+        async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
+            from m3.core.llm.base import ToolResult
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # First attempt: missing required fields
+                return ToolResult(tool_name=tool_choice, input={"kind": "personal"})
+            return ToolResult(tool_name=tool_choice, input={
+                "kind": "personal",
+                "interpretation": {"what_happened": "retry success",
+                                   "when": {"iso": None, "source": "unknown"}, "confidence": 0.5},
+                "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+            })
+
+    ingester.llm = _BadFirstLLM()
+    out = await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text", text="retry me",
+    ))
+    assert call_count["n"] == 2
+    assert out.kind == "personal"
+
+
+@pytest.mark.asyncio
+async def test_extraction_raises_after_retries_exhausted(ingester, tmp_brain):
+    import uuid as _uuid
+    from pydantic import ValidationError
+    item_id = _uuid.UUID("dddd0000-0000-0000-0000-000000000002")
+
+    class _AlwaysBadLLM:
+        supports_tools = True
+        supports_vision = False
+        supports_audio = False
+
+        async def complete_tool(self, *, messages, tools, system, tool_choice, max_tokens, temperature):
+            from m3.core.llm.base import ToolResult
+            return ToolResult(tool_name=tool_choice, input={"kind": "personal"})
+
+    ingester.llm = _AlwaysBadLLM()
+    with pytest.raises(ValidationError):
+        await ingester.ingest(IngestInput(
+            item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+            content_type="text", text="always bad",
+        ))
 
 
 @pytest.mark.asyncio
