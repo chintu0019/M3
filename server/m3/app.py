@@ -15,6 +15,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from m3.api.ingest_http import build_ingest_router
 from m3.api.retrieve import build_retrieve_router
 
 logger = logging.getLogger("m3.app")
@@ -24,15 +25,17 @@ class _Embedder(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
-def build_app(*, brain_root: Path, embedder: _Embedder) -> FastAPI:
+def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> FastAPI:
     app = FastAPI(title="M3", version="0.2.0")
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
     app.state.brain_root = brain_root
     app.state.embedder = embedder
+    app.state.llm_factory = llm_factory
 
     app.include_router(build_retrieve_router(brain_root=brain_root, embedder=embedder))
+    app.include_router(build_ingest_router(brain_root=brain_root, embedder=embedder, llm_factory=llm_factory))
 
     @app.get("/api/v1/status")
     async def status():
@@ -50,13 +53,33 @@ def _make_embedder():
     return FastembedEmbeddingProvider()
 
 
+def _make_llm():
+    """Pick an LLM provider from M3_LLM_PROVIDER. Supports: ollama | anthropic."""
+    provider = os.environ.get("M3_LLM_PROVIDER", "ollama").lower()
+    if provider == "ollama":
+        from m3.core.llm.ollama import OllamaProvider
+
+        return OllamaProvider(
+            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            model=os.environ.get("OLLAMA_MODEL", "qwen2.5:14b"),
+        )
+    if provider == "anthropic":
+        from m3.core.llm.anthropic import AnthropicProvider
+
+        return AnthropicProvider(
+            api_key=os.environ["ANTHROPIC_API_KEY"],
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+        )
+    raise RuntimeError(f"unknown M3_LLM_PROVIDER: {provider!r}")
+
+
 def run() -> None:
     """Entrypoint for the m3-server console script and `m3 start`."""
     brain = _default_brain()
     if not (brain / "self.md").exists():
         raise SystemExit(f"brain at {brain} is not initialized. Run `m3 init` first.")
     embedder = _make_embedder()
-    app = build_app(brain_root=brain, embedder=embedder)
+    app = build_app(brain_root=brain, embedder=embedder, llm_factory=_make_llm)
     host = os.environ.get("M3_HOST", "127.0.0.1")
     port = int(os.environ.get("M3_PORT", "7007"))
     logger.info("M3 server starting at http://%s:%d (brain=%s)", host, port, brain)
