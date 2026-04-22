@@ -348,21 +348,31 @@ def _format_ingest_summary(out: dict[str, Any]) -> str:
     return f"✓ {kind} (conf {conf:.2f})\nentities: {ents}{q_marker}"
 
 
-def build_from_env() -> TelegramCapture:
-    """Read env vars and build a TelegramCapture. Raises if the token is unset."""
-    token = os.environ.get("M3_TELEGRAM_TOKEN")
+def build_from_config() -> TelegramCapture:
+    """Build a TelegramCapture using config resolution (env > config.yml > default).
+    Raises a helpful RuntimeError if the token isn't configured anywhere yet."""
+    from m3.core import config as _cfg
+    token = _cfg.telegram_token()
     if not token:
         raise RuntimeError(
-            "M3_TELEGRAM_TOKEN is required. Create a bot via @BotFather and export the token."
+            "Telegram bot token not configured. Run `m3 telegram init` once to set it up."
         )
-    server = os.environ.get("M3_SERVER_URL", DEFAULT_SERVER_URL)
-    allowed = _parse_allowed_chats(os.environ.get("M3_TELEGRAM_ALLOWED_CHATS"))
-    return TelegramCapture(bot_token=token, server_url=server, allowed_chats=allowed)
+    return TelegramCapture(
+        bot_token=token,
+        server_url=_cfg.telegram_server_url(),
+        allowed_chats=_cfg.telegram_allowed_chats(),
+    )
+
+
+# Preserved for callers that pre-date the config module. New code should use
+# build_from_config.
+def build_from_env() -> TelegramCapture:
+    return build_from_config()
 
 
 async def run() -> None:
     """Entrypoint for `m3 telegram` — polls until Ctrl+C."""
-    cap = build_from_env()
+    cap = build_from_config()
     await cap.start()
     try:
         stop_event = asyncio.Event()

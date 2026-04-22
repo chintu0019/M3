@@ -173,22 +173,90 @@ def start(
     _run()
 
 
-@app.command()
-def telegram():
-    """Run the Telegram capture bot (long-poll).
+telegram_app = typer.Typer(
+    help="Telegram capture — ingest messages from a personal bot.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+app.add_typer(telegram_app, name="telegram")
 
-    Requires M3_TELEGRAM_TOKEN. Strongly recommend setting
-    M3_TELEGRAM_ALLOWED_CHATS to a comma-separated list of chat ids so
-    random people who find your bot can't write into your brain. If
-    M3_SERVER_URL is unset, defaults to http://127.0.0.1:7007 — make
-    sure `m3 start` is running there.
-    """
+
+@telegram_app.callback()
+def _telegram_default(ctx: typer.Context):
+    """Default action when `m3 telegram` is run with no subcommand: start the bot."""
+    if ctx.invoked_subcommand is not None:
+        return
     import asyncio as _asyncio
     from m3.capture.telegram import run as _tg_run
+    from m3.core import config as _cfg
+    if not _cfg.telegram_token():
+        typer.echo("No Telegram bot configured yet. Run `m3 telegram init` to set one up.", err=True)
+        raise typer.Exit(code=1)
     try:
         _asyncio.run(_tg_run())
     except KeyboardInterrupt:
         typer.echo("\ntelegram bot stopped")
+
+
+@telegram_app.command("init")
+def telegram_init():
+    """First-run wizard. Creates a bot config in ~/.config/m3/config.yml."""
+    import asyncio as _asyncio
+    from m3.capture.telegram_setup import run_wizard
+    try:
+        code = _asyncio.run(run_wizard())
+    except KeyboardInterrupt:
+        typer.echo("\naborted")
+        code = 130
+    raise typer.Exit(code=code)
+
+
+@telegram_app.command("install-service")
+def telegram_install_service():
+    """Install `m3 start` + `m3 telegram` as a background service that runs on login.
+
+    macOS: ~/Library/LaunchAgents/local.m3.{server,telegram}.plist
+    Linux: ~/.config/systemd/user/m3-{server,telegram}.service
+    """
+    from m3.capture.telegram_service import ServiceError, install
+    try:
+        paths = install()
+    except ServiceError as e:
+        typer.echo(f"install failed: {e}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("installed:")
+    for p in paths:
+        typer.echo(f"  {p}")
+
+
+@telegram_app.command("uninstall-service")
+def telegram_uninstall_service():
+    """Remove the m3 launchd / systemd units installed by install-service."""
+    from m3.capture.telegram_service import ServiceError, uninstall
+    try:
+        paths = uninstall()
+    except ServiceError as e:
+        typer.echo(f"uninstall failed: {e}", err=True)
+        raise typer.Exit(code=1)
+    if not paths:
+        typer.echo("no m3 services were installed; nothing to remove.")
+        return
+    typer.echo("removed:")
+    for p in paths:
+        typer.echo(f"  {p}")
+
+
+@telegram_app.command("status")
+def telegram_status():
+    """Show the effective Telegram config (token redacted)."""
+    from m3.core import config as _cfg
+    token = _cfg.telegram_token()
+    chats = _cfg.telegram_allowed_chats()
+    server = _cfg.telegram_server_url()
+    typer.echo(f"token:       {'<set>' if token else '(not configured — run `m3 telegram init`)'}")
+    typer.echo(f"allow-list:  {sorted(chats) if chats else '(open — anyone)'}")
+    typer.echo(f"server-url:  {server}")
+    typer.echo(f"config path: {_cfg.config_path()}")
 
 
 class _FakeLLM:
