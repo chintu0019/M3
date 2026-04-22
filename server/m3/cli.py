@@ -173,6 +173,39 @@ def start(
     _run()
 
 
+@app.command("eval")
+def eval_cmd(
+    json_out: Path = typer.Option(None, "--json-out", help="Write raw results to this JSON file."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Also print per-case summaries."),
+    case: str = typer.Option(None, "--case", help="Run only the named case."),
+):
+    """Run the extraction eval suite against the configured LLM.
+
+    Uses whatever provider _make_llm picks — same as ingest / chat — so this
+    measures real quality on the same code path users hit.
+    """
+    import asyncio as _asyncio
+    from m3.evals.corpus import CORPUS
+    from m3.evals.runner import export_json, format_report, run_suite
+
+    cases = None
+    if case:
+        cases = [c for c in CORPUS if c.name == case]
+        if not cases:
+            names = ", ".join(c.name for c in CORPUS)
+            typer.echo(f"no case named {case!r} — available: {names}", err=True)
+            raise typer.Exit(code=2)
+
+    llm = _make_llm()
+    suite = _asyncio.run(run_suite(llm=llm, cases=cases))
+    typer.echo(format_report(suite, verbose=verbose))
+    if json_out:
+        export_json(suite, json_out)
+        typer.echo(f"  wrote results to {json_out}")
+    if suite.pass_rate < 1.0:
+        raise typer.Exit(code=1)
+
+
 telegram_app = typer.Typer(
     help="Telegram capture — ingest messages from a personal bot.",
     invoke_without_command=True,
