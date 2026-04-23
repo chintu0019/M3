@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -171,6 +172,30 @@ async def test_until_iso_filters_newer_items(tmp_brain: Path):
     hits = await retriever.search("Aditya", k=10, until_iso="2026-01-01")
     ids = [h.item_id[-4:] for h in hits]
     assert "bb01" in ids and "bb02" not in ids
+
+
+@pytest.mark.asyncio
+async def test_retrieve_parses_temporal_from_query(tmp_brain: Path):
+    """'Aditya last year' should auto-scope to 2025 and drop the 2026 item."""
+    _write_item(
+        tmp_brain,
+        "00000000-0000-0000-0000-000000001001",
+        "Meeting with Aditya.",
+        ["Aditya"],
+        "2025-01-15",
+    )
+    _write_item(
+        tmp_brain,
+        "00000000-0000-0000-0000-000000001002",
+        "Coffee with Aditya.",
+        ["Aditya"],
+        "2026-04-22",
+    )
+    retriever = Retriever(brain_root=tmp_brain, embedder=_Embedder())
+    hits = await retriever.search("Aditya last year", k=10, today=date(2026, 4, 22))
+    ids = [h.item_id[-4:] for h in hits]
+    assert "1001" in ids
+    assert "1002" not in ids
 
 
 def test_retrieval_hit_is_dataclass():

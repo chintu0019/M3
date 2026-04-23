@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Protocol
 
@@ -26,6 +27,7 @@ from m3.brain.fts import FTSIndex
 from m3.brain.hooks import HookIndex
 from m3.brain.items import read_meta
 from m3.brain.vectors import VectorIndex
+from m3.core import temporal as _temporal
 
 HOOK_TYPES = ["who", "what", "where", "project", "stance_entity"]
 
@@ -62,10 +64,22 @@ class Retriever:
         k: int = 10,
         since_iso: str | None = None,
         until_iso: str | None = None,
+        today: date | None = None,
     ) -> list[RetrievalHit]:
         q = (query or "").strip()
         if not q:
             return []
+
+        # If the caller didn't pass an explicit time window, try to extract one
+        # from the query text ("sarah last week"). Keeps literal time phrases
+        # out of the FTS index so they don't inflate irrelevant lexical hits.
+        if since_iso is None and until_iso is None:
+            parsed = _temporal.parse(q, today=today)
+            q = parsed.query or q
+            since_iso = parsed.since_iso
+            until_iso = parsed.until_iso
+            if not q:
+                return []
 
         fts_hits, hook_hits = self._gather(q)
         qvec = (await self.embedder.embed([q]))[0]
