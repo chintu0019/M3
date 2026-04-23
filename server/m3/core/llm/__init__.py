@@ -18,10 +18,6 @@ from m3.core.llm.base import (
     ToolResult,
 )
 from m3.core.llm.embeddings import FastEmbedProvider
-from m3.core.llm.factories import (
-    create_embedding_provider,
-    create_llm_provider,
-)
 from m3.core.llm.ollama import OllamaProvider
 
 __all__ = [
@@ -34,7 +30,5 @@ __all__ = [
     "OllamaProvider",
     "Tool",
     "ToolResult",
-    "create_embedding_provider",
-    "create_llm_provider",
     "make_content_blocks",
 ]
