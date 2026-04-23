@@ -63,12 +63,17 @@ class M3ApiClient:
         *,
         server_url: str = DEFAULT_SERVER_URL,
         http_client: httpx.AsyncClient | None = None,
+        bearer_token: str | None = None,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self._own_client = http_client is None
         self._http = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(CHAT_TIMEOUT_SECS, read=CHAT_TIMEOUT_SECS),
         )
+        self._bearer = bearer_token
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._bearer}"} if self._bearer else {}
 
     async def aclose(self) -> None:
         if self._own_client:
@@ -78,6 +83,7 @@ class M3ApiClient:
         r = await self._http.post(
             f"{self.server_url}/api/v1/ingest/text",
             json={"text": text, "source": "telegram"},
+            headers=self._headers(),
             timeout=INGEST_TIMEOUT_SECS,
         )
         r.raise_for_status()
@@ -88,7 +94,9 @@ class M3ApiClient:
         data = {"source": "telegram"}
         r = await self._http.post(
             f"{self.server_url}/api/v1/ingest/file",
-            files=files, data=data, timeout=INGEST_TIMEOUT_SECS,
+            files=files, data=data,
+            headers=self._headers(),
+            timeout=INGEST_TIMEOUT_SECS,
         )
         r.raise_for_status()
         return r.json()
@@ -96,7 +104,9 @@ class M3ApiClient:
     async def retrieve(self, query: str, k: int = 3) -> list[dict[str, Any]]:
         r = await self._http.get(
             f"{self.server_url}/api/v1/retrieve",
-            params={"q": query, "k": k}, timeout=30.0,
+            params={"q": query, "k": k},
+            headers=self._headers(),
+            timeout=30.0,
         )
         r.raise_for_status()
         return r.json().get("hits", [])
@@ -105,7 +115,9 @@ class M3ApiClient:
         """Stream the /api/v1/chat SSE response and return the final content."""
         async with self._http.stream(
             "POST", f"{self.server_url}/api/v1/chat",
-            json={"message": message}, timeout=CHAT_TIMEOUT_SECS,
+            json={"message": message},
+            headers=self._headers(),
+            timeout=CHAT_TIMEOUT_SECS,
         ) as r:
             r.raise_for_status()
             final = ""
@@ -126,12 +138,20 @@ class M3ApiClient:
             return final or "(no answer)"
 
     async def status(self) -> dict[str, Any]:
-        r = await self._http.get(f"{self.server_url}/api/v1/status", timeout=10.0)
+        r = await self._http.get(
+            f"{self.server_url}/api/v1/status",
+            headers=self._headers(),
+            timeout=10.0,
+        )
         r.raise_for_status()
         return r.json()
 
     async def entity_count(self) -> int:
-        r = await self._http.get(f"{self.server_url}/api/v1/entities", timeout=15.0)
+        r = await self._http.get(
+            f"{self.server_url}/api/v1/entities",
+            headers=self._headers(),
+            timeout=15.0,
+        )
         r.raise_for_status()
         return len(r.json().get("entities", []))
 
@@ -146,9 +166,14 @@ class TelegramCapture:
         server_url: str = DEFAULT_SERVER_URL,
         allowed_chats: frozenset[int] = frozenset(),
         http_client: httpx.AsyncClient | None = None,
+        bearer_token: str | None = None,
     ) -> None:
         self.app = Application.builder().token(bot_token).build()
-        self.api = M3ApiClient(server_url=server_url, http_client=http_client)
+        self.api = M3ApiClient(
+            server_url=server_url,
+            http_client=http_client,
+            bearer_token=bearer_token,
+        )
         self.server_url = self.api.server_url
         self.allowed_chats = allowed_chats
 
@@ -393,6 +418,7 @@ def build_from_config() -> TelegramCapture:
         bot_token=token,
         server_url=_cfg.telegram_server_url(),
         allowed_chats=_cfg.telegram_allowed_chats(),
+        bearer_token=_cfg.auth_api_key() if _cfg.auth_required() else None,
     )
 
 

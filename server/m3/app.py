@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from m3.api.auth import auth_middleware
 from m3.api.chat import build_chat_router
 from m3.api.entities_new import build_entities_router
 from m3.api.ingest_http import build_ingest_router
@@ -38,6 +39,9 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
+    # Optional bearer auth for /api/v1/*. Resolves config per-request so
+    # `m3 auth` CLI changes take effect without a server restart.
+    app.middleware("http")(auth_middleware)
     app.state.brain_root = brain_root
     app.state.embedder = embedder
     app.state.llm_factory = llm_factory

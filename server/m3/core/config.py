@@ -56,9 +56,22 @@ class LLMConfig:
 
 
 @dataclass
+class AuthConfig:
+    """Opt-in bearer-token auth for /api/v1/*.
+
+    Off by default: M3 binds 127.0.0.1 and the loopback is the security
+    boundary. Turn it on when exposing the server beyond localhost (e.g.
+    reaching it over Tailscale from a phone).
+    """
+    require_auth: bool = False
+    api_key: str | None = None
+
+
+@dataclass
 class M3Config:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +86,10 @@ class M3Config:
                 "ollama_model": self.llm.ollama_model,
                 "anthropic_api_key": self.llm.anthropic_api_key,
                 "anthropic_model": self.llm.anthropic_model,
+            },
+            "auth": {
+                "require_auth": self.auth.require_auth,
+                "api_key": self.auth.api_key,
             },
         }
 
@@ -107,6 +124,9 @@ def load() -> M3Config:
     llm_raw = raw.get("llm") or {}
     if not isinstance(llm_raw, dict):
         llm_raw = {}
+    auth_raw = raw.get("auth") or {}
+    if not isinstance(auth_raw, dict):
+        auth_raw = {}
     return M3Config(
         telegram=TelegramConfig(
             token=_str_or_none(tg.get("token")),
@@ -119,6 +139,10 @@ def load() -> M3Config:
             ollama_model=_str_or_none(llm_raw.get("ollama_model")),
             anthropic_api_key=_str_or_none(llm_raw.get("anthropic_api_key")),
             anthropic_model=_str_or_none(llm_raw.get("anthropic_model")),
+        ),
+        auth=AuthConfig(
+            require_auth=bool(auth_raw.get("require_auth", False)),
+            api_key=_str_or_none(auth_raw.get("api_key")),
         ),
     )
 
@@ -205,3 +229,16 @@ def anthropic_model() -> str:
         or load().llm.anthropic_model
         or "claude-sonnet-4-20250514"
     )
+
+
+def auth_required() -> bool:
+    """True when the HTTP surface should enforce bearer-token auth."""
+    env = os.environ.get("M3_REQUIRE_AUTH")
+    if env is not None:
+        return env.lower() in ("1", "true", "yes")
+    return load().auth.require_auth
+
+
+def auth_api_key() -> str | None:
+    """The configured API key (env > config.yml), or None."""
+    return os.environ.get("M3_API_KEY") or load().auth.api_key

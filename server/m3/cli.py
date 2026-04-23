@@ -358,6 +358,57 @@ def telegram_status():
     typer.echo(f"config path: {_cfg.config_path()}")
 
 
+auth_app = typer.Typer(help="API key management for the HTTP surface.")
+app.add_typer(auth_app, name="auth")
+
+
+@auth_app.command("generate-key")
+def auth_generate_key():
+    """Generate a fresh API key, store it in config.yml, and enable auth.
+
+    Prints the key to stdout so it can be piped into a secret manager or
+    pasted into the client once. The server picks up the new key on the
+    next request — no restart needed.
+    """
+    from m3.api.auth import generate_key
+    from m3.core import config as _cfg
+
+    key = generate_key()
+
+    def _set(c: _cfg.M3Config) -> _cfg.M3Config:
+        c.auth.api_key = key
+        c.auth.require_auth = True
+        return c
+
+    _cfg.update(_set)
+    typer.echo(key)
+
+
+@auth_app.command("show-key")
+def auth_show_key():
+    """Print the configured API key (or note that none is configured)."""
+    from m3.core import config as _cfg
+
+    key = _cfg.auth_api_key()
+    if not key:
+        typer.echo("(no key configured)")
+        raise typer.Exit(code=1)
+    typer.echo(key)
+
+
+@auth_app.command("disable")
+def auth_disable():
+    """Turn auth off. Leaves the key in config.yml in case you want to re-enable."""
+    from m3.core import config as _cfg
+
+    def _set(c: _cfg.M3Config) -> _cfg.M3Config:
+        c.auth.require_auth = False
+        return c
+
+    _cfg.update(_set)
+    typer.echo("auth disabled")
+
+
 class _FakeLLM:
     supports_tools = True
     supports_vision = False

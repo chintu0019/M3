@@ -1,12 +1,25 @@
-// API client for M3 local server (brain-backed, no auth).
+// API client for M3 local server.
 // Defaults to same-origin; override with VITE_API_URL for `npm run dev` against a running server.
+// Auth: if localStorage.M3_API_KEY is set (user paired the client with a
+// running server that has auth enabled), attach Authorization: Bearer. If
+// not set, no header is sent — which is fine when the server runs in default
+// local-only mode (loopback = security boundary).
 
 const BASE = import.meta.env.VITE_API_URL || "";
+
+function authHeaders(): HeadersInit {
+  const k = typeof localStorage !== "undefined" ? localStorage.getItem("M3_API_KEY") : null;
+  return k ? { Authorization: `Bearer ${k}` } : {};
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...(init?.headers || {}),
+    },
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -80,11 +93,11 @@ export interface LLMSettings {
 
 // --- methods ---
 
-async function* chatStream(message: string, history?: unknown[]) {
+async function* chatStream(message: string, history?: unknown[], session_id?: string) {
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history }),
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ message, history, session_id }),
   });
   if (!res.ok || !res.body) throw new Error(`chat ${res.status}`);
   const reader = res.body.getReader();
@@ -127,7 +140,11 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     form.append("source", source);
-    const res = await fetch(`${BASE}/api/v1/ingest/file`, { method: "POST", body: form });
+    const res = await fetch(`${BASE}/api/v1/ingest/file`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: form,
+    });
     if (!res.ok) throw new Error(`ingest file ${res.status}`);
     return res.json();
   },
