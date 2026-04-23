@@ -88,6 +88,60 @@ def _fallback_extraction(text: str) -> ExtractionOutput:
     )
 
 
+class DegradedReprocessError(Exception):
+    """Raised when a re-ingest would strictly worsen an item's existing meta.
+
+    `reprocess_one` (and friends) catch this so a flaky LLM retry can't corrupt
+    a previously-good item: the old meta stays, the brain's derived state is
+    unchanged, and the user sees a clear skip reason.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _extraction_is_hollow(parsed: ExtractionOutput) -> bool:
+    """Empty self_updates AND empty entity_updates AND no hooks that mention entities.
+    'Hollow' means the LLM returned a valid shape but with nothing useful inside —
+    typically the result of a retry prompt where the model picked a minimal path."""
+    if parsed.self_updates or parsed.entity_updates:
+        return False
+    h = parsed.hooks
+    hook_entity_count = len(h.who) + len(h.what) + len(h.where) + len(h.stance)
+    if hook_entity_count > 0:
+        return False
+    # structured_fields / signal count as "useful" for record/signal kinds
+    if parsed.structured_fields is not None or parsed.signal is not None:
+        return False
+    return True
+
+
+def _detect_degradation(old_meta: "items_mod.ItemMeta | None", new_parsed: ExtractionOutput) -> str | None:
+    """Return a human-readable reason if the new extraction degrades the old meta,
+    else None. 'Degrades' means at least one of:
+    - old kind was useful (not unknown), new is unknown
+    - old had non-hollow extraction, new is hollow
+    """
+    if old_meta is None:
+        return None   # nothing to degrade from
+    if old_meta.kind != "unknown" and new_parsed.kind == "unknown":
+        return f"new kind=unknown would degrade existing kind={old_meta.kind!r}"
+    old_raw = old_meta.llm_output_raw or {}
+    old_had_updates = bool(old_raw.get("self_updates") or old_raw.get("entity_updates"))
+    old_hooks = old_raw.get("hooks") or {}
+    old_had_hook_entities = any(bool(old_hooks.get(k)) for k in ("who", "what", "where", "stance"))
+    old_was_useful = old_had_updates or old_had_hook_entities \
+        or old_raw.get("structured_fields") is not None \
+        or old_raw.get("signal") is not None
+    if old_was_useful and _extraction_is_hollow(new_parsed):
+        return (
+            "new extraction is hollow (no self_updates, entity_updates, or hooks) "
+            "but existing meta had content"
+        )
+    return None
+
+
 def _repair_message(exc: ValidationError) -> str:
     """Craft a compact corrective prompt from a Pydantic ValidationError."""
     errors = exc.errors()
@@ -140,7 +194,15 @@ class Ingester:
         self.llm = llm
         self.embedder = embedder
 
-    async def ingest(self, inp: IngestInput) -> IngestOutput:
+    async def ingest(self, inp: IngestInput, *, refuse_if_degraded: bool = False) -> IngestOutput:
+        """Run the full ingest pipeline for one item.
+
+        If `refuse_if_degraded` is True, we compare the new extraction against
+        any existing meta before applying. When the new extraction would worsen
+        the existing meta (fallback-kind when we had a real kind, or a hollow
+        extraction when we had real updates), raise `DegradedReprocessError`.
+        The outer try/except rolls back so the existing brain state is preserved.
+        """
         item_id_str = str(inp.item_id)
         now_iso = datetime.now(timezone.utc).isoformat()
         today = now_iso[:10]
@@ -212,6 +274,16 @@ class Ingester:
                     item_id_str, extraction_error,
                 )
                 parsed = _fallback_extraction(inp.text)
+
+            # Reprocess guard: if the caller asked us to preserve the existing
+            # meta on degradation, check now — before we overwrite it or touch
+            # downstream state. This catches the "qwen hallucinated a minimal
+            # payload on retry" case we saw in real use on 2026-04-23.
+            if refuse_if_degraded:
+                existing_meta = items_mod.read_meta(self.brain_root, inp.item_id)
+                reason = _detect_degradation(existing_meta, parsed)
+                if reason is not None:
+                    raise DegradedReprocessError(reason)
 
             # 1. Meta
             llm_output_raw = parsed.model_dump()

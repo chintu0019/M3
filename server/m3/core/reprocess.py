@@ -30,7 +30,7 @@ from typing import Protocol
 
 from m3.brain.items import ItemMeta, read_meta
 from m3.brain.layout import BrainPaths, init_brain
-from m3.core.ingest import IngestInput, Ingester
+from m3.core.ingest import DegradedReprocessError, IngestInput, Ingester
 from m3.core.llm import LLMProvider
 
 
@@ -86,8 +86,14 @@ async def reprocess_one(
         )
     ingester = Ingester(brain_root=brain_root, llm=llm, embedder=embedder)
     try:
-        await ingester.ingest(_meta_to_ingest_input(meta))
+        await ingester.ingest(_meta_to_ingest_input(meta), refuse_if_degraded=True)
         return ReprocessResult(items_processed=1)
+    except DegradedReprocessError as e:
+        return ReprocessResult(
+            items_processed=0,
+            items_skipped=1,
+            errors=[f"{item_id}: kept existing meta ({e.reason})"],
+        )
     except Exception as e:  # noqa: BLE001 — we surface all errors
         return ReprocessResult(
             items_processed=0,
@@ -117,8 +123,11 @@ async def reprocess_all_unknown(
             result.items_skipped += 1
             continue
         try:
-            await ingester.ingest(_meta_to_ingest_input(meta))
+            await ingester.ingest(_meta_to_ingest_input(meta), refuse_if_degraded=True)
             result.items_processed += 1
+        except DegradedReprocessError as e:
+            result.errors.append(f"{item_id}: kept existing meta ({e.reason})")
+            result.items_skipped += 1
         except Exception as e:  # noqa: BLE001
             result.errors.append(f"{item_id}: {e}")
             result.items_skipped += 1
