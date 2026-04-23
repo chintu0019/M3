@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 from m3.core.llm.base import LLMProvider, Message, Tool, ToolResult
+from m3.core.llm_log import LLMCall, now_iso, prompt_chars, record
 
 logger = logging.getLogger("m3.llm.ollama")
 
@@ -42,10 +44,26 @@ class OllamaProvider(LLMProvider):
             "options": {"temperature": temperature, "num_predict": max_tokens},
             "stream": False,
         }
-        r = await self._client.post("/api/chat", json=payload)
-        r.raise_for_status()
-        data = r.json()
-        return data["message"]["content"]
+        started = time.monotonic()
+        status = "ok"
+        try:
+            r = await self._client.post("/api/chat", json=payload)
+            r.raise_for_status()
+            data = r.json()
+            return data["message"]["content"]
+        except Exception as e:
+            status = f"error:{type(e).__name__}"
+            raise
+        finally:
+            # Ollama's /api/chat doesn't reliably report token usage; leave
+            # input/output_tokens as None and fall back to prompt_chars for
+            # rough sizing.
+            await record(LLMCall(
+                ts=now_iso(), provider="ollama", model=self._model,
+                method="complete", prompt_chars=prompt_chars(messages),
+                latency_ms=int((time.monotonic() - started) * 1000),
+                status=status,
+            ))
 
     async def complete_stream(
         self,
@@ -83,6 +101,32 @@ class OllamaProvider(LLMProvider):
         tool_choice: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.2,
+    ) -> ToolResult:
+        started = time.monotonic()
+        status = "ok"
+        try:
+            return await self._complete_tool_impl(
+                messages, tools, system, tool_choice, max_tokens, temperature,
+            )
+        except Exception as e:
+            status = f"error:{type(e).__name__}"
+            raise
+        finally:
+            await record(LLMCall(
+                ts=now_iso(), provider="ollama", model=self._model,
+                method="complete_tool", prompt_chars=prompt_chars(messages),
+                latency_ms=int((time.monotonic() - started) * 1000),
+                status=status,
+            ))
+
+    async def _complete_tool_impl(
+        self,
+        messages: list[Message],
+        tools: list[Tool],
+        system: str | None,
+        tool_choice: str | None,
+        max_tokens: int,
+        temperature: float,
     ) -> ToolResult:
         # Prefer Ollama's native tools API. If the model returns a free-form response,
         # fall back to JSON-schema-in-prompt extraction below.

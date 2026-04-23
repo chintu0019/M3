@@ -9,11 +9,13 @@ Groq, OpenRouter, Together, Ollama, llama.cpp, ...).
 import base64
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 
 import anthropic
 
 from m3.core.llm.base import LLMProvider, Tool, ToolResult
+from m3.core.llm_log import LLMCall, now_iso, prompt_chars, record
 
 logger = logging.getLogger("m3.llm")
 
@@ -77,8 +79,27 @@ class AnthropicProvider(LLMProvider):
         if system:
             kwargs["system"] = system
 
-        response = await self.client.messages.create(**kwargs)
-        return response.content[0].text
+        started = time.monotonic()
+        status = "ok"
+        input_tokens = output_tokens = None
+        try:
+            response = await self.client.messages.create(**kwargs)
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                input_tokens = getattr(usage, "input_tokens", None)
+                output_tokens = getattr(usage, "output_tokens", None)
+            return response.content[0].text
+        except Exception as e:
+            status = f"error:{type(e).__name__}"
+            raise
+        finally:
+            await record(LLMCall(
+                ts=now_iso(), provider="anthropic", model=self.model,
+                method="complete", prompt_chars=prompt_chars(messages),
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                status=status,
+            ))
 
     async def complete_stream(
         self,
@@ -125,25 +146,44 @@ class AnthropicProvider(LLMProvider):
         if tool_choice:
             kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
 
-        response = await self.client.messages.create(**kwargs)
+        started = time.monotonic()
+        status = "ok"
+        input_tokens = output_tokens = None
+        try:
+            response = await self.client.messages.create(**kwargs)
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                input_tokens = getattr(usage, "input_tokens", None)
+                output_tokens = getattr(usage, "output_tokens", None)
 
-        text_parts: list[str] = []
-        tool_name = ""
-        tool_input: dict = {}
-        for block in response.content:
-            btype = getattr(block, "type", None)
-            if btype == "tool_use":
-                tool_name = block.name
-                tool_input = block.input if isinstance(block.input, dict) else {}
-            elif btype == "text":
-                text_parts.append(block.text)
+            text_parts: list[str] = []
+            tool_name = ""
+            tool_input: dict = {}
+            for block in response.content:
+                btype = getattr(block, "type", None)
+                if btype == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input if isinstance(block.input, dict) else {}
+                elif btype == "text":
+                    text_parts.append(block.text)
 
-        return ToolResult(
-            tool_name=tool_name,
-            input=tool_input,
-            stop_reason=response.stop_reason or "end_turn",
-            text="".join(text_parts),
-        )
+            return ToolResult(
+                tool_name=tool_name,
+                input=tool_input,
+                stop_reason=response.stop_reason or "end_turn",
+                text="".join(text_parts),
+            )
+        except Exception as e:
+            status = f"error:{type(e).__name__}"
+            raise
+        finally:
+            await record(LLMCall(
+                ts=now_iso(), provider="anthropic", model=self.model,
+                method="complete_tool", prompt_chars=prompt_chars(messages),
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                status=status,
+            ))
 
 
 class OpenAICompatibleProvider(LLMProvider):

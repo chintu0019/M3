@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from pathlib import Path
@@ -356,6 +357,65 @@ def telegram_status():
     typer.echo(f"allow-list:  {sorted(chats) if chats else '(open — anyone)'}")
     typer.echo(f"server-url:  {server}")
     typer.echo(f"config path: {_cfg.config_path()}")
+
+
+@app.command()
+def stats(
+    days: int = typer.Option(7, "--days", help="Look back window in days."),
+):
+    """Summarize LLM call log: call count, total tokens, avg latency.
+
+    Reads ~/.local/state/m3/llm-calls.jsonl (or $M3_LOG_DIR override),
+    groups by (provider, model) over the last N days, and prints totals.
+    """
+    import datetime as _dt
+    from collections import defaultdict
+
+    from m3.core.llm_log import log_path
+
+    p = log_path()
+    if not p.exists():
+        typer.echo("no llm-calls.jsonl yet")
+        return
+
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)
+    groups: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: {
+        "calls": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0,
+    })
+    for line in p.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        try:
+            ts = _dt.datetime.fromisoformat(d["ts"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if ts < cutoff:
+            continue
+        key = (d.get("provider", "?"), d.get("model", "?"))
+        g = groups[key]
+        g["calls"] += 1
+        if str(d.get("status", "")).startswith("error"):
+            g["errors"] += 1
+        g["input_tokens"] += int(d.get("input_tokens") or 0)
+        g["output_tokens"] += int(d.get("output_tokens") or 0)
+        g["latency_ms"] += int(d.get("latency_ms") or 0)
+
+    if not groups:
+        typer.echo(f"no calls in the last {days} days")
+        return
+
+    typer.echo(f"M3 LLM usage (last {days} days):")
+    for (provider, model), g in sorted(groups.items()):
+        avg = g["latency_ms"] // g["calls"] if g["calls"] else 0
+        typer.echo(
+            f"  {provider:<12} {model:<36}  calls={g['calls']:>4}  "
+            f"errors={g['errors']:>3}  in={g['input_tokens']:>6}  "
+            f"out={g['output_tokens']:>6}  avg={avg}ms"
+        )
 
 
 auth_app = typer.Typer(help="API key management for the HTTP surface.")
