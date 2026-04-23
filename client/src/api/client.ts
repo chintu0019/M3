@@ -134,6 +134,12 @@ export const api = {
 
   self: () => request<SelfResponse>("/api/v1/self"),
 
+  updateSelfSection: (slot: string, new_content: string) =>
+    request<{ slot: string; new_body: string }>(
+      `/api/v1/self/${encodeURIComponent(slot)}`,
+      { method: "PUT", body: JSON.stringify({ slot, new_content }) },
+    ),
+
   entities: () => request<{ entities: EntitySummary[] }>("/api/v1/entities"),
 
   entity: (slug: string) => request<EntitySummary>(`/api/v1/entities/${encodeURIComponent(slug)}`),

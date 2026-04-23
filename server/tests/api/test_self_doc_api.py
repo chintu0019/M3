@@ -35,3 +35,29 @@ def test_get_self_returns_all_slots(app):
     assert set(body["slots"].keys()) == {
         "Preferences", "People", "Projects", "Goals", "Context", "Beliefs", "Timeline",
     }
+
+
+def test_put_self_slot_replaces_body(app):
+    c = TestClient(app)
+    r = c.put("/api/v1/self/Preferences", json={"slot": "Preferences", "new_content": "- like black coffee"})
+    assert r.status_code == 200
+    assert r.json()["new_body"] == "- like black coffee"
+    body = c.get("/api/v1/self").json()
+    assert "like black coffee" in body["slots"]["Preferences"]
+    # Previous content should be gone
+    assert "Likes ristretto" not in body["slots"]["Preferences"]
+
+
+def test_put_self_slot_empty_clears(app):
+    c = TestClient(app)
+    c.put("/api/v1/self/Beliefs", json={"slot": "Beliefs", "new_content": "whatever"})
+    r = c.put("/api/v1/self/Beliefs", json={"slot": "Beliefs", "new_content": ""})
+    assert r.status_code == 200
+    body = c.get("/api/v1/self").json()
+    assert body["slots"]["Beliefs"].strip() in ("", "_(empty)_")
+
+
+def test_put_unknown_slot_returns_404(app):
+    c = TestClient(app)
+    r = c.put("/api/v1/self/NotASlot", json={"slot": "NotASlot", "new_content": "x"})
+    assert r.status_code == 404
