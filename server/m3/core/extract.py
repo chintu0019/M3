@@ -90,6 +90,15 @@ class StanceHook(BaseModel):
     evidence_quote: str = ""
 
 
+def _coerce_name_or_string(value: Any) -> Any:
+    """Accept either a plain string or a `{"name": str, ...}` shape and normalise
+    to the string. Observed drift from qwen 7B on 2026-04-23: it emits list-of-
+    object where we expect list-of-string (e.g. hooks.project: [{"name": "X"}])."""
+    if isinstance(value, dict) and "name" in value:
+        return value["name"]
+    return value
+
+
 class Hooks(BaseModel):
     who: list[HookEntityRef] = Field(default_factory=list)
     what: list[HookEntityRef] = Field(default_factory=list)
@@ -98,6 +107,32 @@ class Hooks(BaseModel):
     source: str | None = None
     project: list[str] = Field(default_factory=list)
     stance: list[StanceHook] = Field(default_factory=list)
+
+    @field_validator("project", mode="before")
+    @classmethod
+    def _coerce_project_list(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_coerce_name_or_string(v) for v in value]
+        if isinstance(value, dict):
+            # Single-entry object where a list was expected — wrap it.
+            return [_coerce_name_or_string(value)]
+        if isinstance(value, str):
+            # Comma-separated string — seen occasionally from local models.
+            return [s.strip() for s in value.split(",") if s.strip()]
+        return value
+
+    @field_validator("when", "source", mode="before")
+    @classmethod
+    def _coerce_optional_string(cls, value: Any) -> Any:
+        # Some small models emit {"iso": "..."} or {"name": "..."} where we want
+        # a plain string. Pull the obvious string out.
+        if isinstance(value, dict):
+            for key in ("name", "value", "iso", "text"):
+                inner = value.get(key)
+                if isinstance(inner, str):
+                    return inner
+            return None
+        return value
 
 
 class SelfUpdate(BaseModel):
@@ -141,6 +176,15 @@ class EntityUpdate(BaseModel):
     section_update: SectionUpdate | None = None
     related_entity_names: list[str] = Field(default_factory=list)
 
+    @field_validator("merge_aliases", "related_entity_names", mode="before")
+    @classmethod
+    def _coerce_string_list(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_coerce_name_or_string(v) for v in value]
+        if isinstance(value, dict):
+            return [_coerce_name_or_string(value)]
+        return value
+
     @field_validator("section_update", mode="before")
     @classmethod
     def _coerce_section_update(cls, value: Any) -> Any:
@@ -174,6 +218,15 @@ class StructuredFields(BaseModel):
 class SignalBlock(BaseModel):
     topic_entities: list[str] = Field(default_factory=list)
     one_line_takeaway: str = ""
+
+    @field_validator("topic_entities", mode="before")
+    @classmethod
+    def _coerce_topic_list(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_coerce_name_or_string(v) for v in value]
+        if isinstance(value, dict):
+            return [_coerce_name_or_string(value)]
+        return value
 
 
 class ExtractionOutput(BaseModel):
