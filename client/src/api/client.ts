@@ -82,6 +82,20 @@ export interface ItemMeta {
   confidence: number;
 }
 
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  message_count: number;
+  last_ts: string;
+}
+
+export interface ChatSessionTurn {
+  ts: string;
+  role: string;
+  content: string;
+  events: unknown[];
+}
+
 export interface LLMSettings {
   provider: string;
   ollama_host: string;
@@ -182,4 +196,13 @@ export const api = {
     }),
 
   chat: chatStream,
+
+  listChats: () => request<ChatSessionSummary[]>("/api/v1/chats"),
+
+  newChat: () => request<{ id: string }>("/api/v1/chats", { method: "POST" }),
+
+  getChat: (sid: string) =>
+    request<{ id: string; turns: ChatSessionTurn[] }>(
+      `/api/v1/chats/${encodeURIComponent(sid)}`,
+    ),
 };

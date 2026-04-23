@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from m3.api.auth import auth_middleware
 from m3.api.chat import build_chat_router
+from m3.api.chats import build_chats_router
 from m3.api.entities_new import build_entities_router
 from m3.api.ingest_http import build_ingest_router
 from m3.api.items import build_items_router
@@ -53,6 +54,7 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     app.include_router(build_questions_router(brain_root=brain_root))
     app.include_router(build_items_router(brain_root=brain_root))
     app.include_router(build_chat_router(brain_root=brain_root, embedder=embedder, llm_factory=llm_factory))
+    app.include_router(build_chats_router(brain_root=brain_root))
     app.include_router(build_settings_router())
 
     @app.get("/api/v1/status")
