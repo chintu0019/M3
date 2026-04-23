@@ -1,19 +1,21 @@
 import { useEffect, useState } from "react";
-import { api, ChatSessionSummary } from "../api/client";
+import { api, type ChatSessionSummary, type ClusterResponse, type ClusterNode } from "../api/client";
 import ChatMessage, { ChatEvent } from "../components/ChatMessage";
+import ClusterGraph from "../components/ClusterGraph";
 
 type Turn = { role: "user" | "assistant"; content: string; events?: ChatEvent[] };
 
 export default function Chat() {
+  const [sid, setSid] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [sid, setSid] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [showPast, setShowPast] = useState(false);
+  const [cluster, setCluster] = useState<ClusterResponse | null>(null);
+  const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // Create a fresh session on mount so every new chat auto-persists.
     api.newChat()
       .then((r) => setSid(r.id))
       .catch(() => setSid(null));
@@ -22,15 +24,33 @@ export default function Chat() {
 
   async function refreshSessions() {
     try {
-      const list = await api.listChats();
-      setSessions(list);
+      setSessions(await api.listChats());
     } catch {
       // Sidebar is nice-to-have; don't block chatting on it.
     }
   }
 
+  async function refreshCluster(q: string) {
+    try {
+      setCluster(await api.cluster(q));
+    } catch {
+      // Graph is nice-to-have; chat still works without it.
+    }
+  }
+
+  function addHighlight(id: string) {
+    setHighlightedIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }
+
   async function startNewChat() {
     setTurns([]);
+    setCluster(null);
+    setHighlightedIds(new Set());
     try {
       const r = await api.newChat();
       setSid(r.id);
@@ -51,7 +71,12 @@ export default function Chat() {
           events: (t.events as ChatEvent[]) || [],
         })),
       );
+      setHighlightedIds(new Set());
       setShowPast(false);
+      // Seed the graph with the last user turn, if any.
+      const lastUser = [...r.turns].reverse().find((t) => t.role === "user");
+      if (lastUser) void refreshCluster(lastUser.content);
+      else setCluster(null);
     } catch {
       // ignore
     }
@@ -61,11 +86,39 @@ export default function Chat() {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
-    setTurns((t) => [...t, { role: "user", content: text }, { role: "assistant", content: "", events: [] }]);
+    setTurns((t) => [
+      ...t,
+      { role: "user", content: text },
+      { role: "assistant", content: "", events: [] },
+    ]);
     setBusy(true);
+    setHighlightedIds(new Set());
+    // Refetch the cluster graph for this new turn, in parallel with the stream.
+    void refreshCluster(text);
+
     try {
       for await (const ev of api.chat(text, undefined, sid || undefined)) {
         const event = ev as ChatEvent;
+
+        // Live highlight from agent tool events
+        if (event.type === "tool_call") {
+          const input = (event.tool_input as { item_id?: string; slug?: string }) || {};
+          if (event.tool_name === "open_item" && input.item_id) {
+            addHighlight(`item:${input.item_id}`);
+          }
+          if (event.tool_name === "open_entity" && input.slug) {
+            addHighlight(`entity:${input.slug}`);
+          }
+        } else if (
+          event.type === "tool_result" &&
+          event.tool_name === "search_brain" &&
+          Array.isArray(event.tool_result)
+        ) {
+          for (const hit of event.tool_result as Array<{ item_id?: string }>) {
+            if (hit?.item_id) addHighlight(`item:${hit.item_id}`);
+          }
+        }
+
         setTurns((t) => {
           const copy = t.slice();
           const last = copy[copy.length - 1];
@@ -90,7 +143,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6 flex flex-col h-full">
+    <div className="h-full flex flex-col p-4">
       <div className="flex items-center justify-between mb-3 text-sm">
         <button
           onClick={() => setShowPast((s) => !s)}
@@ -98,10 +151,7 @@ export default function Chat() {
         >
           {showPast ? "Hide past chats" : `Past chats (${sessions.length})`}
         </button>
-        <button
-          onClick={startNewChat}
-          className="text-m3-muted hover:text-m3-text"
-        >
+        <button onClick={startNewChat} className="text-m3-muted hover:text-m3-text">
           New chat
         </button>
       </div>
@@ -114,47 +164,79 @@ export default function Chat() {
             <button
               key={s.id}
               onClick={() => loadChat(s.id)}
-              className={`w-full text-left p-3 hover:bg-m3-surface ${s.id === sid ? "bg-m3-surface" : ""}`}
+              className={`w-full text-left p-3 hover:bg-m3-surface ${
+                s.id === sid ? "bg-m3-surface" : ""
+              }`}
             >
               <div className="text-m3-text text-sm">{s.title}</div>
               <div className="text-m3-muted text-xs">
-                {s.message_count} message{s.message_count === 1 ? "" : "s"} · {s.last_ts.slice(0, 10)}
+                {s.message_count} message{s.message_count === 1 ? "" : "s"} ·{" "}
+                {s.last_ts.slice(0, 10)}
               </div>
             </button>
           ))}
         </div>
       )}
-      <div className="flex-1 overflow-auto">
-        {turns.length === 0 && (
-          <div className="text-m3-muted text-sm">
-            Ask something grounded in your brain: "Who did I meet last week?"
+
+      {/* Split pane: messages left, graph right. */}
+      <div className="flex-1 grid grid-cols-5 gap-4 min-h-0">
+        <div className="col-span-3 flex flex-col min-h-0">
+          <div className="flex-1 overflow-auto pr-2">
+            {turns.length === 0 && (
+              <div className="text-m3-muted text-sm">
+                Ask something grounded in your brain: "Who did I meet last week?"
+              </div>
+            )}
+            {turns.map((t, i) => (
+              <ChatMessage key={i} role={t.role} events={t.events} content={t.content} />
+            ))}
           </div>
-        )}
-        {turns.map((t, i) => (
-          <ChatMessage key={i} role={t.role} events={t.events} content={t.content} />
-        ))}
+          <form
+            className="mt-4 flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit();
+            }}
+          >
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask M3…"
+              className="flex-1 bg-m3-surface border border-m3-border rounded-lg px-4 py-2 text-m3-text focus:outline-none focus:border-m3-accent"
+            />
+            <button
+              type="submit"
+              disabled={busy || !input.trim()}
+              className="px-4 py-2 rounded-lg bg-m3-accent hover:bg-m3-accent-hover disabled:opacity-50"
+            >
+              {busy ? "…" : "Send"}
+            </button>
+          </form>
+        </div>
+
+        <div className="col-span-2 min-h-0 overflow-hidden">
+          {cluster ? (
+            <ClusterGraph
+              nodes={cluster.nodes}
+              edges={cluster.edges}
+              highlightedIds={highlightedIds}
+              onNodeClick={(n) => {
+                const raw = n as ClusterNode;
+                if (raw.type === "item" && raw.item_id) {
+                  window.open(`/items/${raw.item_id}`, "_blank");
+                } else if (raw.type === "entity" && raw.entity_slug) {
+                  window.open(`/entities/${raw.entity_slug}`, "_blank");
+                }
+              }}
+              height={600}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-m3-muted text-sm border border-m3-border rounded-lg">
+              graph will appear after you send a message
+            </div>
+          )}
+        </div>
       </div>
-      <form
-        className="mt-4 flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask M3…"
-          className="flex-1 bg-m3-surface border border-m3-border rounded-lg px-4 py-2 text-m3-text focus:outline-none focus:border-m3-accent"
-        />
-        <button
-          type="submit"
-          disabled={busy || !input.trim()}
-          className="px-4 py-2 rounded-lg bg-m3-accent hover:bg-m3-accent-hover disabled:opacity-50"
-        >
-          {busy ? "…" : "Send"}
-        </button>
-      </form>
     </div>
   );
 }
