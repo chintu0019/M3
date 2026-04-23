@@ -4,33 +4,32 @@ version = "0.1.0"
 description = "M3 - Personal Knowledge Operating System"
 requires-python = ">=3.12"
 dependencies = [
+    # Local-first HTTP app
     "fastapi[standard]>=0.115",
     "uvicorn[standard]>=0.32",
-    "sqlalchemy[asyncio]>=2.0",
-    "asyncpg>=0.30",
-    "alembic>=1.14",
-    "pgvector>=0.3",
+    "httpx>=0.28",
+    "python-multipart>=0.0.18",
+    "typer>=0.15",
+    # Filesystem brain + indexes
+    "sqlite-vec>=0.1.6",
+    "python-frontmatter>=1.1",
+    "pyyaml>=6.0",
+    # LLM providers
     "anthropic>=0.42",
     "openai>=1.60",
+    "ollama>=0.4",
     "fastembed>=0.4",
-    "arq>=0.26",
-    "minio>=7.2",
+    # Capture channels
     "python-telegram-bot>=21.0",
+    # Content extractors
     "trafilatura>=1.12",
     "pdfplumber>=0.11",
     "python-docx>=1.1",
     "openpyxl>=3.1",
     "python-pptx>=1.0",
     "ebooklib>=0.18",
+    # Config parsing
     "pydantic-settings>=2.6",
-    "pyyaml>=6.0",
-    "httpx>=0.28",
-    "redis>=5.2",
-    "python-multipart>=0.0.18",
-    "sqlite-vec>=0.1.6",
-    "ollama>=0.4",
-    "python-frontmatter>=1.1",
-    "typer>=0.15",
 ]
 
 [project.optional-dependencies]
