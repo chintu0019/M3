@@ -83,6 +83,53 @@ def test_format_ingest_summary_singular_question():
     assert "questions" not in out  # no plural
 
 
+def test_format_ingest_summary_flags_unknown_fallback():
+    """kind=unknown means the LLM failed validation twice; surface the fallback
+    message so the user knows M3 stored text but didn't extract anything."""
+    out = _format_ingest_summary({
+        "kind": "unknown", "confidence": 0.0,
+        "self_touched": [], "entities_touched": [], "questions_raised": 1,
+    })
+    assert "extraction failed" in out.lower()
+    assert "searchable" in out.lower() or "preserved" in out.lower()
+
+
+def test_format_ingest_summary_flags_hollow_personal():
+    """kind=personal but no self/entity updates means the LLM was valid but
+    hollow. The user needs to know so they don't assume it extracted."""
+    out = _format_ingest_summary({
+        "kind": "personal", "confidence": 0.9,
+        "self_touched": [], "entities_touched": [], "questions_raised": 0,
+    })
+    # Triangle marker instead of check
+    assert "△" in out
+    assert "no self" in out.lower() or "no slot" in out.lower() or "no self or entity" in out.lower()
+    assert "anthropic" in out.lower() or "settings" in out.lower()
+
+
+def test_format_ingest_summary_record_kind_ok_without_entities():
+    """A record doesn't need self/entity updates — structured_fields did the work.
+    Don't flag it as hollow."""
+    out = _format_ingest_summary({
+        "kind": "record", "confidence": 0.95,
+        "self_touched": [], "entities_touched": [], "questions_raised": 0,
+    })
+    assert "△" not in out
+    assert "✓" in out
+
+
+def test_format_ingest_summary_shows_self_slots():
+    """When self_touched is populated, surface which slots got updated."""
+    out = _format_ingest_summary({
+        "kind": "personal", "confidence": 0.9,
+        "self_touched": ["People", "Projects"], "entities_touched": ["Aditya"],
+        "questions_raised": 0,
+    })
+    assert "People" in out
+    assert "Projects" in out
+    assert "Aditya" in out
+
+
 # --- M3ApiClient against the real FastAPI app ---
 
 

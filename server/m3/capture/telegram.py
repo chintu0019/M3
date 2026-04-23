@@ -340,12 +340,44 @@ def _truncate(s: str, n: int) -> str:
 
 
 def _format_ingest_summary(out: dict[str, Any]) -> str:
+    """Human-readable summary of an ingest response.
+
+    Surfaces the degenerate cases explicitly so users know when M3 stored
+    something but didn't actually understand it:
+    - kind=unknown → fallback path, extraction failed, item preserved for FTS
+    - self=[], entities=[] → extraction was hollow (model didn't populate slots)
+    - low confidence → model itself is unsure
+    """
     kind = out.get("kind") or "?"
     conf = out.get("confidence") or 0.0
-    ents = ", ".join(out.get("entities_touched") or []) or "—"
+    self_touched = out.get("self_touched") or []
+    entities = out.get("entities_touched") or []
     qs = out.get("questions_raised") or 0
-    q_marker = f" · {qs} open question{'s' if qs != 1 else ''}" if qs else ""
-    return f"✓ {kind} (conf {conf:.2f})\nentities: {ents}{q_marker}"
+
+    # Strong negative signal: extraction hit the fallback path.
+    if kind == "unknown":
+        return (
+            "⚠ extraction failed — item text preserved and searchable, "
+            "but no self/entity updates.\n"
+            "try `/ask` on the content, or reprocess later."
+        )
+
+    # Hollow extraction — valid shape but nothing useful.
+    if not self_touched and not entities and qs == 0 and kind not in {"record", "signal"}:
+        return (
+            f"△ {kind} (conf {conf:.2f}) · saved but no self or entity updates.\n"
+            "this often means the local model missed the content; "
+            "try the Settings tab to switch to Anthropic."
+        )
+
+    parts = [f"✓ {kind} (conf {conf:.2f})"]
+    if self_touched:
+        parts.append(f"self: {', '.join(self_touched)}")
+    if entities:
+        parts.append(f"entities: {', '.join(entities)}")
+    if qs:
+        parts.append(f"{qs} open question{'s' if qs != 1 else ''}")
+    return "\n".join(parts)
 
 
 def build_from_config() -> TelegramCapture:
