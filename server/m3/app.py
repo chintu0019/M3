@@ -89,9 +89,17 @@ def _make_llm():
 
     Called per-request via llm_factory, so a change to config.yml or env takes
     effect on the NEXT incoming request with no server restart needed.
+
+    Also honors M3_LLM_PROVIDER=fake for the E2E smoke test — kept in sync with
+    the CLI path in cli.py::_make_llm so `m3 start` exercises the same fake
+    behavior that per-module tests do. The fake provider is env-only (never
+    persisted to config.yml).
     """
     from m3.core import config as _cfg
     provider = _cfg.llm_provider().lower()
+    if provider == "fake":
+        from m3.cli import _FakeLLM
+        return _FakeLLM()
     if provider == "ollama":
         from m3.core.llm.ollama import OllamaProvider
         return OllamaProvider(host=_cfg.ollama_host(), model=_cfg.ollama_model())
