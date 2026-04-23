@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 
-export function useApi<T>(fn: () => Promise<T>, deps: readonly unknown[] = []): { data: T | null; error: string | null; loading: boolean } {
+export function useApi<T>(
+  fn: () => Promise<T>,
+  deps: readonly unknown[] = [],
+): { data: T | null; error: string | null; loading: boolean; refetch: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -25,7 +29,7 @@ export function useApi<T>(fn: () => Promise<T>, deps: readonly unknown[] = []): 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, tick]);
 
-  return { data, error, loading };
+  return { data, error, loading, refetch: () => setTick((t) => t + 1) };
 }

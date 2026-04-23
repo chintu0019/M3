@@ -37,14 +37,11 @@ function QuestionRow({ q, onResolve }: { q: string; onResolve: (text: string, an
 }
 
 export default function Questions() {
-  const { data, error, loading } = useApi(() => api.openQuestions());
-  const [tick, setTick] = useState(0);
-  const refresh = () => setTick(tick + 1);
+  const { data, error, loading, refetch } = useApi(() => api.openQuestions());
 
   async function handleResolve(text: string, answer: string) {
     await api.resolveQuestion(text, answer);
-    refresh();
-    window.location.reload();   // simple-minded; works, though a cleaner refetch would be nicer.
+    refetch();
   }
 
   if (loading) return <div className="p-6 text-m3-muted">loading…</div>;
