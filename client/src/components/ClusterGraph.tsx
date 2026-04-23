@@ -180,12 +180,17 @@ export default function ClusterGraph({
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
+  // Force remount when the node set changes so fitView recenters on each new
+  // graph. xyflow v12's fitView only auto-fits on initial render, not when
+  // the nodes array swaps wholesale.
+  const graphKey = nodes.map((n) => n.id).join("|");
+
   return (
     <div
       style={{ width: "100%", height }}
       className="bg-m3-bg border border-m3-border rounded-lg overflow-hidden"
     >
-      <ReactFlowProvider>
+      <ReactFlowProvider key={graphKey}>
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
