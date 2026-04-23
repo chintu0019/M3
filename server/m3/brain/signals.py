@@ -94,3 +94,30 @@ def bump_mention_count(
         upsert(root, existing)
 
     return entry["count"]
+
+
+GRADUATED_MARKER = "(graduated from signal mentions)"
+
+
+def graduate_if_ready(root: Path, *, canonical_name: str, threshold: int = 3) -> bool:
+    """Mark an entity as graduated when its signal_mentions crosses ``threshold``.
+
+    Graduation state is encoded in the ``description`` field using
+    :data:`GRADUATED_MARKER` as a stable sentinel. Idempotent: once graduated,
+    subsequent calls return False.
+
+    Returns True only on the graduation transition; False in every other case
+    (below threshold, already graduated, or missing entity).
+    """
+    slug = slugify(canonical_name)
+    doc = load(root, slug=slug)
+    if doc is None:
+        return False
+    if doc.signal_mentions < threshold:
+        return False
+    if doc.description and GRADUATED_MARKER in doc.description:
+        return False
+    merged = (doc.description or "").strip()
+    doc.description = (merged + " " + GRADUATED_MARKER).strip() if merged else GRADUATED_MARKER
+    upsert(root, doc)
+    return True

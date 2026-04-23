@@ -376,6 +376,12 @@ class Ingester:
                         takeaway=sig.one_line_takeaway or None,
                         date=parsed.interpretation.when.iso or today,
                     )
+                    if signals_mod.graduate_if_ready(self.brain_root, canonical_name=name):
+                        changelog.append(
+                            self.brain_root, timestamp=now_iso,
+                            target=f"entities/{entity_doc.slugify(name)}.md",
+                            summary="graduated from signals (>=3 mentions)",
+                        )
 
             # 5. Open questions
             for oq in parsed.open_questions:

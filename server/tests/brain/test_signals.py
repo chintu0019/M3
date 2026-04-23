@@ -3,7 +3,12 @@ import uuid
 from pathlib import Path
 
 from m3.brain.entity_doc import EntityDoc, load, upsert
-from m3.brain.signals import Signal, append_signal, bump_mention_count
+from m3.brain.signals import (
+    Signal,
+    append_signal,
+    bump_mention_count,
+    graduate_if_ready,
+)
 
 
 def test_append_signal_writes_to_month_file(tmp_brain: Path):
@@ -59,3 +64,43 @@ def test_bump_mention_count_captures_takeaway_and_date(tmp_brain: Path):
     assert entry["count"] == 1
     assert entry["last_seen"] == "2026-04-19"
     assert entry["takeaways"] == ["Launched a new pricing tier."]
+
+
+def _ensure_entity(root: Path, name: str) -> None:
+    upsert(root, EntityDoc(
+        canonical_name=name, entity_type="topic",
+        aliases=[], description=None, related=[], signal_mentions=0,
+        summary_external=None, body="",
+    ))
+
+
+def test_graduate_if_ready_below_threshold_is_noop(tmp_brain: Path):
+    _ensure_entity(tmp_brain, "Anthropic")
+    bump_mention_count(tmp_brain, canonical_name="Anthropic")
+    bump_mention_count(tmp_brain, canonical_name="Anthropic")
+    assert graduate_if_ready(tmp_brain, canonical_name="Anthropic") is False
+    doc = load(tmp_brain, slug="anthropic")
+    assert doc is not None
+    assert "graduated from signal" not in (doc.description or "")
+
+
+def test_graduate_if_ready_at_threshold_marks_graduated(tmp_brain: Path):
+    _ensure_entity(tmp_brain, "Anthropic")
+    for _ in range(3):
+        bump_mention_count(tmp_brain, canonical_name="Anthropic")
+    assert graduate_if_ready(tmp_brain, canonical_name="Anthropic") is True
+    doc = load(tmp_brain, slug="anthropic")
+    assert doc is not None
+    assert "graduated from signal" in (doc.description or "")
+
+
+def test_graduate_if_ready_is_idempotent(tmp_brain: Path):
+    _ensure_entity(tmp_brain, "Anthropic")
+    for _ in range(5):
+        bump_mention_count(tmp_brain, canonical_name="Anthropic")
+    assert graduate_if_ready(tmp_brain, canonical_name="Anthropic") is True
+    assert graduate_if_ready(tmp_brain, canonical_name="Anthropic") is False
+
+
+def test_graduate_if_ready_missing_entity_returns_false(tmp_brain: Path):
+    assert graduate_if_ready(tmp_brain, canonical_name="nope") is False
