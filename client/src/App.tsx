@@ -5,6 +5,7 @@ import Search from "./views/Search";
 import Self from "./views/Self";
 import Entities from "./views/Entities";
 import EntityDetail from "./views/EntityDetail";
+import ItemDetail from "./views/ItemDetail";
 import Questions from "./views/Questions";
 import Chat from "./views/Chat";
 import Settings from "./views/Settings";
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/self" element={<Self />} />
           <Route path="/entities" element={<Entities />} />
           <Route path="/entities/:slug" element={<EntityDetail />} />
+          <Route path="/items/:id" element={<ItemDetail />} />
           <Route path="/questions" element={<Questions />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/search" replace />} />
