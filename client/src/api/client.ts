@@ -96,6 +96,30 @@ export interface ChatSessionTurn {
   events: unknown[];
 }
 
+export interface ClusterNode {
+  id: string;
+  type: "query" | "item" | "entity";
+  label: string;
+  score: number;
+  kind: string | null;
+  entity_type: string | null;
+  when_iso: string | null;
+  excerpt: string | null;
+  item_id: string | null;
+  entity_slug: string | null;
+}
+
+export interface ClusterEdge {
+  source: string;
+  target: string;
+  kind: "matched" | "hooks" | "related";
+}
+
+export interface ClusterResponse {
+  nodes: ClusterNode[];
+  edges: ClusterEdge[];
+}
+
 export interface LLMSettings {
   provider: string;
   ollama_host: string;
@@ -194,6 +218,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(update),
     }),
+
+  cluster: (q: string, k = 15) =>
+    request<ClusterResponse>(`/api/v1/cluster?q=${encodeURIComponent(q)}&k=${k}`),
 
   chat: chatStream,
 

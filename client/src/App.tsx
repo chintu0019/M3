@@ -8,12 +8,14 @@ import EntityDetail from "./views/EntityDetail";
 import ItemDetail from "./views/ItemDetail";
 import Questions from "./views/Questions";
 import Chat from "./views/Chat";
+import Cluster from "./views/Cluster";
 import Settings from "./views/Settings";
 import IngestDrawer from "./components/IngestDrawer";
 
 const tabs = [
   { to: "/search", label: "Search" },
   { to: "/chat", label: "Chat" },
+  { to: "/cluster", label: "Cluster" },
   { to: "/self", label: "Self" },
   { to: "/entities", label: "Entities" },
   { to: "/questions", label: "Open questions" },
@@ -54,6 +56,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/search" replace />} />
           <Route path="/search" element={<Search />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/cluster" element={<Cluster />} />
           <Route path="/self" element={<Self />} />
           <Route path="/entities" element={<Entities />} />
           <Route path="/entities/:slug" element={<EntityDetail />} />
