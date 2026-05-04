@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { useCallback, useEffect, useState } from "react";
 
 export const THEMES = ["document", "notebook", "observatory"] as const;
 export type Theme = (typeof THEMES)[number];
@@ -27,37 +26,6 @@ export function useTheme() {
     return t;
   });
 
-  // Tracks whether this hook instance has applied a user-driven change. If so,
-  // a late server reconcile must not clobber it.
-  const userOverrodeRef = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.settings
-      .getTheme()
-      .then((res) => {
-        if (cancelled || userOverrodeRef.current) return;
-        const t = (THEMES.includes(res.theme as Theme)
-          ? res.theme
-          : "document") as Theme;
-        if (t !== readLocal()) {
-          setThemeState(t);
-          applyTheme(t);
-          localStorage.setItem(STORAGE_KEY, t);
-          broadcast(t);
-        } else if (t !== theme) {
-          setThemeState(t);
-        }
-      })
-      .catch(() => {
-        // Server unreachable — local cache is authoritative for this session.
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Cross-instance sync: when any other hook (palette, settings) changes the
   // theme, every mounted instance picks up the new value.
   useEffect(() => {
@@ -69,18 +37,11 @@ export function useTheme() {
     return () => window.removeEventListener(CHANGE_EVENT, onChange);
   }, []);
 
-  const setTheme = useCallback(async (next: Theme) => {
-    userOverrodeRef.current = true;
+  const setTheme = useCallback((next: Theme) => {
     setThemeState(next);
     applyTheme(next);
     localStorage.setItem(STORAGE_KEY, next);
     broadcast(next);
-    try {
-      await api.settings.setTheme(next);
-    } catch (err) {
-      console.error("theme persist failed", err);
-      // Don't revert the visual — local stays authoritative.
-    }
   }, []);
 
   return { theme, setTheme };

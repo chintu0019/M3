@@ -1,333 +1,93 @@
+"""GET + PUT /api/v1/settings — LLM provider configuration.
+
+The UI reads the effective settings (env > config.yml > default) and writes
+changes to ~/.config/m3/config.yml. Since _make_llm is called per-request and
+re-reads config on each call, a setting change takes effect on the NEXT
+incoming request without a server restart.
+
+The API key is stored in the chmod-600 config file but never returned on
+read — the UI only sees a boolean presence flag. env_overrides surfaces any
+env vars that would win over config.yml, so users can tell when their saved
+setting isn't being used because an env var is shadowing it.
 """
-M3 Settings API -- full CRUD for LLM providers, persisted via user_settings.json.
-"""
 
-import logging
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+import os
 
-from m3.api.deps import verify_auth
-from m3.config import LLMProviderConfig
-from m3.core.engines.loader import load_engine
-from m3.core.llm import (
-    UnconfiguredProvider,
-    create_llm_provider,
-    detect_local_agents,
-)
-from m3.schemas.api import SelfContextSettings, ThemeSetting
-from m3.storage.user_settings import UserSettingsStore
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-logger = logging.getLogger("m3.settings")
-
-router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+from m3.core import config as _cfg
 
 
-# --- Schemas ---
-
-
-class ProviderInfo(BaseModel):
-    name: str
-    type: str
-    model: str
-    base_url: str | None = None
-    has_api_key: bool
-    active: bool
-
-
-class LLMSettingsResponse(BaseModel):
-    active_provider: str
-    providers: list[ProviderInfo]
-    # False on a fresh install where the configured provider can't be built
-    # (no API key, missing CLI binary, etc.). The UI uses this to render an
-    # empty-state prompt instead of letting users hit 500s on every chat.
-    configured: bool = True
-    unconfigured_reason: str | None = None
-
-
-class SwitchProviderRequest(BaseModel):
+class LLMSettingsView(BaseModel):
+    """What the UI sees. api_key is redacted."""
     provider: str
+    ollama_host: str
+    ollama_model: str
+    anthropic_model: str
+    anthropic_api_key_present: bool = False
+    # Informational — tells the user which value is actually in effect.
+    env_overrides: list[str] = Field(default_factory=list)
 
 
-class ProviderCreateRequest(BaseModel):
-    name: str
-    type: str = "openai_compatible"  # anthropic | openai_compatible | local_agent
-    model: str
-    api_key: str = ""
-    base_url: str | None = None
-    command: str | None = None
-    args: list[str] = []
+class LLMSettingsUpdate(BaseModel):
+    """Payload the UI sends. Only non-null fields are written."""
+    provider: str | None = None
+    ollama_host: str | None = None
+    ollama_model: str | None = None
+    anthropic_model: str | None = None
+    anthropic_api_key: str | None = None  # full value, stored in chmod-600 config.yml
+    clear_anthropic_api_key: bool = False
 
 
-class ProviderUpdateRequest(BaseModel):
-    model: str | None = None
-    api_key: str | None = None
-    base_url: str | None = None
-    command: str | None = None
-    args: list[str] | None = None
+def build_settings_router() -> APIRouter:
+    router = APIRouter(prefix="/api/v1", tags=["settings"])
 
-
-# --- Helpers ---
-
-
-def _build_response(request: Request) -> LLMSettingsResponse:
-    """Build the standard LLM settings response from current state."""
-    settings = request.app.state.settings
-    active = settings.llm.default_provider
-    providers = []
-    for name, config in settings.llm.providers.items():
-        providers.append(ProviderInfo(
-            name=name,
-            type=config.type,
-            model=config.model,
-            base_url=config.base_url,
-            has_api_key=bool(config.api_key),
-            active=(name == active),
-        ))
-    llm = getattr(request.app.state, "llm", None)
-    configured = not isinstance(llm, UnconfiguredProvider)
-    reason = None if configured else getattr(llm, "reason", "no provider configured")
-    return LLMSettingsResponse(
-        active_provider=active,
-        providers=providers,
-        configured=configured,
-        unconfigured_reason=reason,
-    )
-
-
-def _rebuild_llm(request: Request) -> None:
-    """Rebuild the LLM provider and compilation engine from current settings."""
-    settings = request.app.state.settings
-    new_llm = create_llm_provider(settings.llm)
-    request.app.state.llm = new_llm
-    request.app.state.engine = load_engine(settings.processing, new_llm)
-
-
-# --- Endpoints ---
-
-
-@router.get("/llm", response_model=LLMSettingsResponse)
-async def get_llm_settings(
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    """Return available LLM providers and which one is active."""
-    return _build_response(request)
-
-
-@router.put("/llm/switch", response_model=LLMSettingsResponse)
-async def switch_provider(
-    body: SwitchProviderRequest,
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    """Switch the active LLM provider."""
-    settings = request.app.state.settings
-    store = request.app.state.user_store
-
-    if body.provider not in settings.llm.providers:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Provider '{body.provider}' not found. "
-                   f"Available: {list(settings.llm.providers.keys())}",
+    @router.get("/settings", response_model=LLMSettingsView)
+    async def get_settings():
+        current = _cfg.load()
+        overrides = []
+        for env_name in (
+            "M3_LLM_PROVIDER", "OLLAMA_HOST", "OLLAMA_MODEL",
+            "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+        ):
+            if os.environ.get(env_name):
+                overrides.append(env_name)
+        return LLMSettingsView(
+            provider=_cfg.llm_provider(),
+            ollama_host=_cfg.ollama_host(),
+            ollama_model=_cfg.ollama_model(),
+            anthropic_model=_cfg.anthropic_model(),
+            anthropic_api_key_present=bool(
+                current.llm.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
+            ),
+            env_overrides=overrides,
         )
 
-    config = settings.llm.providers[body.provider]
-    is_local_url = config.base_url and ("localhost" in config.base_url or "127.0.0.1" in config.base_url)
-    is_local_agent = config.type == "local_agent"
-    if not config.api_key and not is_local_url and not is_local_agent:
-        raise HTTPException(status_code=400, detail=f"Provider '{body.provider}' has no API key set.")
+    @router.put("/settings", response_model=LLMSettingsView)
+    async def put_settings(body: LLMSettingsUpdate):
+        if body.provider is not None and body.provider not in ("ollama", "anthropic"):
+            raise HTTPException(status_code=422, detail=f"unknown provider: {body.provider!r}")
 
-    settings.llm.default_provider = body.provider
-    store.set_active_provider(body.provider)
-    _rebuild_llm(request)
+        def _mutator(c: _cfg.M3Config) -> _cfg.M3Config:
+            if body.provider is not None:
+                c.llm.provider = body.provider
+            if body.ollama_host is not None:
+                c.llm.ollama_host = body.ollama_host or None
+            if body.ollama_model is not None:
+                c.llm.ollama_model = body.ollama_model or None
+            if body.anthropic_model is not None:
+                c.llm.anthropic_model = body.anthropic_model or None
+            if body.clear_anthropic_api_key:
+                c.llm.anthropic_api_key = None
+            elif body.anthropic_api_key is not None:
+                # Empty string clears, non-empty sets.
+                c.llm.anthropic_api_key = body.anthropic_api_key or None
+            return c
 
-    logger.info(f"Switched to provider '{body.provider}' ({config.model})")
-    return _build_response(request)
+        _cfg.update(_mutator)
+        return await get_settings()
 
-
-@router.post("/llm/providers", response_model=LLMSettingsResponse, status_code=201)
-async def add_provider(
-    body: ProviderCreateRequest,
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    """Add a new LLM provider."""
-    settings = request.app.state.settings
-    store = request.app.state.user_store
-
-    if body.name in settings.llm.providers:
-        raise HTTPException(status_code=409, detail=f"Provider '{body.name}' already exists.")
-
-    if body.type not in ("anthropic", "openai_compatible", "local_agent"):
-        raise HTTPException(
-            status_code=400,
-            detail="Type must be 'anthropic', 'openai_compatible', or 'local_agent'.",
-        )
-
-    if body.type == "openai_compatible" and not body.base_url:
-        raise HTTPException(status_code=400, detail="openai_compatible providers require a base_url.")
-
-    if body.type == "local_agent" and not body.command:
-        raise HTTPException(status_code=400, detail="local_agent providers require a command (e.g. 'claude').")
-
-    # Add to in-memory settings
-    provider_config = LLMProviderConfig(
-        type=body.type,
-        api_key=body.api_key,
-        model=body.model,
-        base_url=body.base_url,
-        command=body.command,
-        args=body.args,
-    )
-    settings.llm.providers[body.name] = provider_config
-
-    # Persist
-    store.set_provider(body.name, {
-        "type": body.type,
-        "api_key": body.api_key,
-        "model": body.model,
-        "base_url": body.base_url,
-        "command": body.command,
-        "args": body.args,
-    })
-
-    logger.info(f"Added provider '{body.name}' ({body.type}, {body.model})")
-    return _build_response(request)
-
-
-@router.put("/llm/providers/{name}", response_model=LLMSettingsResponse)
-async def update_provider(
-    name: str,
-    body: ProviderUpdateRequest,
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    """Update an existing provider's config."""
-    settings = request.app.state.settings
-    store = request.app.state.user_store
-
-    if name not in settings.llm.providers:
-        raise HTTPException(status_code=404, detail=f"Provider '{name}' not found.")
-
-    config = settings.llm.providers[name]
-
-    if body.model is not None:
-        config.model = body.model
-    if body.api_key is not None:
-        config.api_key = body.api_key
-    if body.base_url is not None:
-        config.base_url = body.base_url
-    if body.command is not None:
-        config.command = body.command
-    if body.args is not None:
-        config.args = body.args
-
-    # Persist
-    store.set_provider(name, {
-        "type": config.type,
-        "api_key": config.api_key,
-        "model": config.model,
-        "base_url": config.base_url,
-        "command": config.command,
-        "args": config.args,
-    })
-
-    # If this is the active provider, rebuild LLM
-    if name == settings.llm.default_provider:
-        _rebuild_llm(request)
-
-    logger.info(f"Updated provider '{name}'")
-    return _build_response(request)
-
-
-@router.delete("/llm/providers/{name}", response_model=LLMSettingsResponse)
-async def delete_provider(
-    name: str,
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    """Delete a provider."""
-    settings = request.app.state.settings
-    store = request.app.state.user_store
-
-    if name not in settings.llm.providers:
-        raise HTTPException(status_code=404, detail=f"Provider '{name}' not found.")
-
-    if name == settings.llm.default_provider:
-        raise HTTPException(status_code=400, detail="Cannot delete the active provider. Switch first.")
-
-    del settings.llm.providers[name]
-    store.delete_provider(name)
-
-    logger.info(f"Deleted provider '{name}'")
-    return _build_response(request)
-
-
-# --- Local agents (BYO installed AI CLI) ---
-
-
-class LocalAgentInfo(BaseModel):
-    id: str
-    command: str
-    label: str
-    available: bool
-    path: str | None = None
-
-
-@router.get("/agents", response_model=list[LocalAgentInfo])
-async def list_local_agents(_auth: str = Depends(verify_auth)):
-    """Probe PATH for AI CLIs M3 can drive without an API key.
-
-    The Settings UI uses this to render a "use my installed agent" option.
-    """
-    return detect_local_agents()
-
-
-# --- Self-context (Phase D) ---
-
-
-@router.get("/self-context", response_model=SelfContextSettings)
-async def get_self_context_settings(
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    store: UserSettingsStore = request.app.state.user_store
-    return SelfContextSettings(enabled=store.get_self_context_enabled())
-
-
-@router.put("/self-context", response_model=SelfContextSettings)
-async def set_self_context_settings(
-    body: SelfContextSettings,
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    store: UserSettingsStore = request.app.state.user_store
-    store.set_self_context_enabled(body.enabled)
-    return SelfContextSettings(enabled=store.get_self_context_enabled())
-
-
-# --- Theme (Phase E) ---
-
-
-@router.get("/theme", response_model=ThemeSetting)
-async def get_theme_setting(
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    store: UserSettingsStore = request.app.state.user_store
-    return ThemeSetting(theme=store.get_theme())
-
-
-@router.put("/theme", response_model=ThemeSetting)
-async def set_theme_setting(
-    body: ThemeSetting,
-    request: Request,
-    _auth: str = Depends(verify_auth),
-):
-    store: UserSettingsStore = request.app.state.user_store
-    try:
-        store.set_theme(body.theme)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return ThemeSetting(theme=store.get_theme())
+    return router

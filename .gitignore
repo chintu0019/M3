@@ -45,3 +45,7 @@ client/tsconfig.tsbuildinfo
 
 # Local planning/spec docs
 docs/superpowers/
+
+# git worktrees
+.worktrees/
+

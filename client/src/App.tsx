@@ -1,112 +1,75 @@
-import { useCallback, useEffect, useState } from "react";
-import { Navigate, Route, Routes, NavLink } from "react-router-dom";
-import { api } from "./api/client";
-import Library from "./views/Library";
-import LibraryDetail from "./views/LibraryDetail";
+import { useState } from "react";
+import { NavLink, Route, Routes, Navigate } from "react-router-dom";
+
+import Search from "./views/Search";
+import Self from "./views/Self";
+import Entities from "./views/Entities";
+import EntityDetail from "./views/EntityDetail";
+import ItemDetail from "./views/ItemDetail";
+import Questions from "./views/Questions";
+import Chat from "./views/Chat";
+import Cluster from "./views/Cluster";
 import Settings from "./views/Settings";
-import Workspace from "./views/Workspace";
+import IngestDrawer from "./components/IngestDrawer";
+import UpdateBanner from "./components/UpdateBanner";
 
-function Nav({
-  activeModel,
-  configured,
-}: {
-  activeModel: string | null;
-  configured: boolean;
-}) {
-  const linkClass = ({ isActive }: { isActive: boolean }) =>
-    `px-4 py-2 rounded-lg text-sm transition-colors ${
-      isActive
-        ? "bg-m3-accent text-white"
-        : "text-m3-muted hover:text-m3-text hover:bg-m3-surface"
-    }`;
-
-  return (
-    <nav className="flex items-center gap-2 px-4 py-3 border-b border-m3-border bg-m3-bg">
-      <span className="font-bold text-lg mr-4">M3</span>
-      <NavLink to="/documents" className={linkClass}>
-        Documents
-      </NavLink>
-      <NavLink to="/workspace" className={linkClass}>
-        Workspace
-      </NavLink>
-      <div className="flex-1" />
-      {!configured && (
-        <NavLink
-          to="/settings"
-          className="hidden sm:inline text-xs px-3 py-1 rounded-full bg-yellow-900/30 border border-yellow-600/50 text-yellow-300 hover:bg-yellow-900/50"
-        >
-          No AI agent — pick one
-        </NavLink>
-      )}
-      {configured && activeModel && (
-        <span className="hidden sm:inline text-xs text-m3-muted px-2">{activeModel}</span>
-      )}
-      <NavLink
-        to="/settings"
-        title={configured ? "Settings" : "Pick an AI agent"}
-        className={({ isActive }) =>
-          `w-9 h-9 flex items-center justify-center rounded-lg transition-colors relative ${
-            isActive ? "bg-m3-accent text-white" : "text-m3-muted hover:text-m3-text hover:bg-m3-surface"
-          }`
-        }
-      >
-        {!configured && (
-          <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-yellow-400" />
-        )}
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      </NavLink>
-    </nav>
-  );
-}
+const tabs = [
+  { to: "/search", label: "Search" },
+  { to: "/chat", label: "Chat" },
+  { to: "/cluster", label: "Cluster" },
+  { to: "/self", label: "Self" },
+  { to: "/entities", label: "Entities" },
+  { to: "/questions", label: "Open questions" },
+  { to: "/settings", label: "Settings" },
+];
 
 export default function App() {
-  const [activeModel, setActiveModel] = useState<string | null>(null);
-  const [configured, setConfigured] = useState<boolean>(true);
-
-  const loadActiveModel = useCallback(async () => {
-    try {
-      const res = await api.settings.getLLM();
-      const active = res.providers.find((p) => p.active);
-      if (active) setActiveModel(active.model);
-      setConfigured(res.configured);
-    } catch {
-      // not connected -- leave configured as-is so we don't false-alarm during
-      // a network blip after the user has already picked a provider.
-    }
-  }, []);
-
-  useEffect(() => {
-    loadActiveModel();
-    const interval = setInterval(loadActiveModel, 10000);
-    return () => clearInterval(interval);
-  }, [loadActiveModel]);
+  const [ingestOpen, setIngestOpen] = useState(false);
 
   return (
-    <div className="h-screen overflow-hidden bg-m3-bg text-m3-text flex flex-col">
-      <Nav activeModel={activeModel} configured={configured} />
-      <main className="flex-1 min-h-0">
+    <div className="h-screen flex flex-col bg-m3-bg text-m3-text">
+      <UpdateBanner />
+      <nav className="flex items-center gap-2 px-6 py-3 border-b border-m3-border">
+        <span className="font-bold text-lg mr-6">M3</span>
+        {tabs.map((t) => (
+          <NavLink
+            key={t.to}
+            to={t.to}
+            className={({ isActive }) =>
+              `px-3 py-1.5 rounded-md text-sm ${
+                isActive ? "bg-m3-accent text-white" : "text-m3-muted hover:text-m3-text hover:bg-m3-surface"
+              }`
+            }
+          >
+            {t.label}
+          </NavLink>
+        ))}
+        <div className="flex-1" />
+        <button
+          onClick={() => setIngestOpen(true)}
+          className="px-3 py-1.5 rounded-md text-sm bg-m3-surface hover:bg-m3-border"
+        >
+          + Ingest
+        </button>
+      </nav>
+
+      <main className="flex-1 min-h-0 overflow-auto">
         <Routes>
-          <Route path="/" element={<Navigate to="/documents" replace />} />
-          <Route path="/documents" element={<Library />} />
-          <Route path="/documents/:id" element={<LibraryDetail />} />
-          <Route path="/workspace" element={<Workspace />} />
+          <Route path="/" element={<Navigate to="/search" replace />} />
+          <Route path="/search" element={<Search />} />
+          <Route path="/chat" element={<Chat />} />
+          <Route path="/cluster" element={<Cluster />} />
+          <Route path="/self" element={<Self />} />
+          <Route path="/entities" element={<Entities />} />
+          <Route path="/entities/:slug" element={<EntityDetail />} />
+          <Route path="/items/:id" element={<ItemDetail />} />
+          <Route path="/questions" element={<Questions />} />
           <Route path="/settings" element={<Settings />} />
-          {/* Legacy redirects so deep links keep working. */}
-          <Route path="/library" element={<Navigate to="/documents" replace />} />
-          <Route path="/library/:id" element={<LegacyLibraryRedirect />} />
-          <Route path="/canvas" element={<Navigate to="/workspace" replace />} />
-          <Route path="/entities/*" element={<Navigate to="/workspace" replace />} />
-          <Route path="/insights" element={<Navigate to="/workspace" replace />} />
+          <Route path="*" element={<Navigate to="/search" replace />} />
         </Routes>
       </main>
+
+      <IngestDrawer open={ingestOpen} onClose={() => setIngestOpen(false)} />
     </div>
   );
-}
-
-function LegacyLibraryRedirect() {
-  const path = window.location.pathname.replace(/^\/library/, "/documents");
-  return <Navigate to={path} replace />;
 }
