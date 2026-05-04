@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from m3.brain import chats as _chats
 from m3.core.agent import run_agent
+from m3.core.llm.unconfigured import UnconfiguredProvider
 from m3.core.tools import BrainTools
 
 
@@ -38,8 +39,22 @@ def build_chat_router(*, brain_root: Path, embedder: _Embedder, llm_factory: Cal
         if not body.message.strip():
             raise HTTPException(status_code=422, detail="message is required")
 
-        tools = BrainTools(brain_root=brain_root, embedder=embedder)
         llm = _get_llm()
+
+        # Pre-flight: if no real provider could be built, short-circuit with a
+        # structured event the UI renders as a Settings CTA. Avoids letting
+        # UnconfiguredProvider's generic RuntimeError surface as a vague
+        # "type: error" toast.
+        if isinstance(llm, UnconfiguredProvider):
+            reason = llm.reason
+
+            async def unconfigured_gen():
+                yield "data: " + json.dumps({"type": "unconfigured", "reason": reason}) + "\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(unconfigured_gen(), media_type="text/event-stream")
+
+        tools = BrainTools(brain_root=brain_root, embedder=embedder)
 
         async def gen():
             collected_events: list[dict] = []

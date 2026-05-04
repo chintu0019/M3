@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, type ChatSessionSummary, type ClusterResponse, type ClusterNode } from "../api/client";
 import ChatMessage, { ChatEvent } from "../components/ChatMessage";
 import ClusterGraph from "../components/ClusterGraph";
 
 type Turn = { role: "user" | "assistant"; content: string; events?: ChatEvent[] };
+
+// Server emits this when no LLM is configured. Carries the reason so the UI
+// can show what's missing (no API key, claude CLI not installed, etc.) and
+// link straight to Settings.
+type UnconfiguredEvent = { type: "unconfigured"; reason: string };
 
 export default function Chat() {
   const [sid, setSid] = useState<string | null>(null);
@@ -14,6 +20,10 @@ export default function Chat() {
   const [showPast, setShowPast] = useState(false);
   const [cluster, setCluster] = useState<ClusterResponse | null>(null);
   const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
+  // Set when the server emits an `unconfigured` SSE event for the most
+  // recent turn. Renders an inline Settings CTA in place of the assistant
+  // bubble's body so users don't see a generic error toast.
+  const [unconfiguredReason, setUnconfiguredReason] = useState<string | null>(null);
 
   useEffect(() => {
     api.newChat()
@@ -93,12 +103,30 @@ export default function Chat() {
     ]);
     setBusy(true);
     setHighlightedIds(new Set());
+    setUnconfiguredReason(null);
     // Refetch the cluster graph for this new turn, in parallel with the stream.
     void refreshCluster(text);
 
     try {
       for await (const ev of api.chat(text, undefined, sid || undefined)) {
-        const event = ev as ChatEvent;
+        const event = ev as ChatEvent | UnconfiguredEvent;
+
+        // Server says no LLM is wired up. Stop streaming, surface a CTA on
+        // the in-flight assistant turn, and let the caller fix it in Settings.
+        if (event.type === "unconfigured") {
+          const reason = (event as UnconfiguredEvent).reason;
+          setUnconfiguredReason(reason);
+          setTurns((t) => {
+            const copy = t.slice();
+            copy[copy.length - 1] = {
+              role: "assistant",
+              content: "",
+              events: [],
+            };
+            return copy;
+          });
+          break;
+        }
 
         // Live highlight from agent tool events
         if (event.type === "tool_call") {
@@ -190,6 +218,18 @@ export default function Chat() {
             {turns.map((t, i) => (
               <ChatMessage key={i} role={t.role} events={t.events} content={t.content} />
             ))}
+            {unconfiguredReason && (
+              <div className="mt-3 border border-yellow-600/50 bg-yellow-900/20 text-yellow-100 p-4 rounded">
+                <div className="font-semibold mb-1">No AI agent configured</div>
+                <div className="text-sm mb-3">{unconfiguredReason}</div>
+                <Link
+                  to="/settings"
+                  className="inline-block px-3 py-1.5 rounded bg-yellow-600/30 hover:bg-yellow-600/50 text-yellow-50 text-sm"
+                >
+                  Open Settings
+                </Link>
+              </div>
+            )}
           </div>
           <form
             className="mt-4 flex gap-2"

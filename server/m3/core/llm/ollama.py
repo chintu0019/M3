@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
+from m3.core.llm._json_tool import (
+    build_tool_prompt,
+    parse_tool_response,
+    recover_stringified_payload,
+    satisfies_required,
+)
 from m3.core.llm.base import LLMProvider, Message, Tool, ToolResult
 from m3.core.llm_log import LLMCall, now_iso, prompt_chars, record
 
@@ -158,8 +163,8 @@ class OllamaProvider(LLMProvider):
             call = tool_calls[0]
             fn = call.get("function", {})
             args = fn.get("arguments") or {}
-            args = _recover_stringified_payload(args, chosen.input_schema)
-            if _satisfies_required(args, chosen.input_schema):
+            args = recover_stringified_payload(args, chosen.input_schema)
+            if satisfies_required(args, chosen.input_schema):
                 return ToolResult(
                     tool_name=fn.get("name", tool_choice or ""),
                     input=args,
@@ -173,11 +178,7 @@ class OllamaProvider(LLMProvider):
         else:
             logger.warning("ollama: no tool_calls; falling back to JSON-in-prompt parse")
 
-        schema_str = json.dumps(chosen.input_schema, indent=2)
-        repair_prompt = (
-            f"Call the `{chosen.name}` tool. Reply with valid JSON only matching this schema:\n"
-            f"{schema_str}\nNo prose, no fences."
-        )
+        repair_prompt = build_tool_prompt(chosen)
         r2 = await self._client.post(
             "/api/chat",
             json={
@@ -193,55 +194,4 @@ class OllamaProvider(LLMProvider):
         )
         r2.raise_for_status()
         text = r2.json()["message"]["content"]
-        parsed = _parse_json(text)
-        return ToolResult(
-            tool_name=chosen.name,
-            input=parsed,
-            stop_reason="tool_use",
-            text="",
-            raw_response=r2.json(),
-        )
-
-
-def _satisfies_required(args: dict, schema: dict) -> bool:
-    """Cheap structural check: every key in the schema's `required` list must be present."""
-    if not isinstance(args, dict):
-        return False
-    for key in (schema.get("required") or []):
-        if key not in args:
-            return False
-    return True
-
-
-def _recover_stringified_payload(args: dict, schema: dict) -> dict:
-    """Some small models wrap their JSON output under a single key whose value is a
-    stringified JSON blob (e.g. `{"map": '{"kind": "personal", ...}'}`). When that
-    happens, try to unwrap the single-string-valued key and parse it; return the
-    inner object if it satisfies the schema's required fields."""
-    if not isinstance(args, dict) or len(args) != 1:
-        return args
-    only_value = next(iter(args.values()))
-    if not isinstance(only_value, str):
-        return args
-    try:
-        inner = json.loads(only_value)
-    except json.JSONDecodeError:
-        return args
-    if isinstance(inner, dict) and _satisfies_required(inner, schema):
-        return inner
-    return args
-
-
-def _parse_json(text: str) -> dict:
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if m:
-        return json.loads(m.group(1).strip())
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end != -1:
-        return json.loads(text[start : end + 1])
-    raise ValueError(f"could not parse JSON from Ollama response: {text[:200]}")
+        return parse_tool_response(text, chosen, raw_response=r2.json())

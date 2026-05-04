@@ -102,22 +102,40 @@ def _make_llm():
     the CLI path in cli.py::_make_llm so `m3 start` exercises the same fake
     behavior that per-module tests do. The fake provider is env-only (never
     persisted to config.yml).
+
+    On any construction failure (missing key, missing CLI, unknown provider)
+    returns an UnconfiguredProvider so the server boots cleanly and the UI
+    can render an empty-state CTA. The chat router pre-flights for this and
+    emits a structured ``unconfigured`` SSE event instead of letting the
+    placeholder's RuntimeError leak to users as a generic stream error.
     """
     from m3.core import config as _cfg
-    provider = _cfg.llm_provider().lower()
-    if provider == "fake":
-        from m3.cli import _FakeLLM
-        return _FakeLLM()
-    if provider == "ollama":
-        from m3.core.llm.ollama import OllamaProvider
-        return OllamaProvider(host=_cfg.ollama_host(), model=_cfg.ollama_model())
-    if provider == "anthropic":
-        key = _cfg.anthropic_api_key()
-        if not key:
-            raise RuntimeError("anthropic provider selected but no API key configured")
-        from m3.core.llm.anthropic import AnthropicProvider
-        return AnthropicProvider(api_key=key, model=_cfg.anthropic_model())
-    raise RuntimeError(f"unknown LLM provider: {provider!r}")
+    from m3.core.llm.unconfigured import UnconfiguredProvider
+
+    try:
+        provider = _cfg.llm_provider().lower()
+        if provider == "fake":
+            from m3.cli import _FakeLLM
+            return _FakeLLM()
+        if provider == "ollama":
+            from m3.core.llm.ollama import OllamaProvider
+            return OllamaProvider(host=_cfg.ollama_host(), model=_cfg.ollama_model())
+        if provider == "anthropic":
+            key = _cfg.anthropic_api_key()
+            if not key:
+                raise RuntimeError("anthropic provider has no api_key")
+            from m3.core.llm.anthropic import AnthropicProvider
+            return AnthropicProvider(api_key=key, model=_cfg.anthropic_model())
+        if provider == "local_agent":
+            from m3.core.llm.local_agent import LocalAgentProvider
+            return LocalAgentProvider(
+                command=_cfg.local_agent_command(),
+                args=_cfg.local_agent_args(),
+            )
+        raise RuntimeError(f"unknown LLM provider: {provider!r}")
+    except RuntimeError as e:
+        logger.warning("LLM not ready: %s -- starting in unconfigured state", e)
+        return UnconfiguredProvider(str(e))
 
 
 def run() -> None:

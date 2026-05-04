@@ -87,8 +87,11 @@ def _guess_content_type(path: Path) -> str:
 def _make_llm():
     """Pick an LLM provider from config (env > config.yml > default).
 
-    Supports: ollama | anthropic | fake. The `fake` provider is only selected
-    via M3_LLM_PROVIDER=fake and is used by smoke tests.
+    Supports: ollama | anthropic | local_agent | fake. The `fake` provider is
+    only selected via M3_LLM_PROVIDER=fake and is used by smoke tests. The
+    server path in app.py wraps construction failures in UnconfiguredProvider;
+    here we surface them as typer.BadParameter so the CLI exits with a clear
+    message.
     """
     from m3.core import config as _cfg
     # `fake` is env-only (never persisted to config.yml).
@@ -104,6 +107,15 @@ def _make_llm():
             raise typer.BadParameter("anthropic provider selected but no API key configured")
         from m3.core.llm.anthropic import AnthropicProvider
         return AnthropicProvider(api_key=key, model=_cfg.anthropic_model())
+    if provider == "local_agent":
+        from m3.core.llm.local_agent import LocalAgentProvider
+        try:
+            return LocalAgentProvider(
+                command=_cfg.local_agent_command(),
+                args=_cfg.local_agent_args(),
+            )
+        except RuntimeError as e:
+            raise typer.BadParameter(str(e))
     raise typer.BadParameter(f"unknown LLM provider: {provider!r}")
 
 

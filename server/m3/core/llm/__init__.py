@@ -18,17 +18,27 @@ from m3.core.llm.base import (
     ToolResult,
 )
 from m3.core.llm.embeddings import FastEmbedProvider
+from m3.core.llm.local_agent import (
+    KNOWN_AGENTS,
+    LocalAgentProvider,
+    detect_local_agents,
+)
 from m3.core.llm.ollama import OllamaProvider
+from m3.core.llm.unconfigured import UnconfiguredProvider
 
 __all__ = [
     "AnthropicProvider",
-    "OpenAICompatibleProvider",
     "EmbeddingProvider",
     "FastEmbedProvider",
+    "KNOWN_AGENTS",
     "LLMProvider",
+    "LocalAgentProvider",
     "Message",
     "OllamaProvider",
+    "OpenAICompatibleProvider",
     "Tool",
     "ToolResult",
+    "UnconfiguredProvider",
+    "detect_local_agents",
     "make_content_blocks",
 ]

@@ -48,11 +48,16 @@ class TelegramConfig:
 
 @dataclass
 class LLMConfig:
-    provider: str | None = None         # "ollama" | "anthropic" | None (= env-driven default)
+    provider: str | None = None         # "ollama" | "anthropic" | "local_agent" | None (= env-driven default)
     ollama_host: str | None = None
     ollama_model: str | None = None
     anthropic_api_key: str | None = None
     anthropic_model: str | None = None
+    # local_agent: shells out to a user-installed AI CLI (claude, codex,
+    # gemini, aider, mods, llm, or a custom command). No M3-managed key --
+    # auth is whatever the user already configured in that CLI.
+    local_agent_command: str | None = None
+    local_agent_args: list[str] | None = None
 
 
 @dataclass
@@ -86,6 +91,12 @@ class M3Config:
                 "ollama_model": self.llm.ollama_model,
                 "anthropic_api_key": self.llm.anthropic_api_key,
                 "anthropic_model": self.llm.anthropic_model,
+                "local_agent_command": self.llm.local_agent_command,
+                "local_agent_args": (
+                    list(self.llm.local_agent_args)
+                    if self.llm.local_agent_args is not None
+                    else None
+                ),
             },
             "auth": {
                 "require_auth": self.auth.require_auth,
@@ -96,6 +107,21 @@ class M3Config:
 
 def _str_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _str_list_or_none(value: Any) -> list[str] | None:
+    """Coerce a YAML list-of-strings to ``list[str]``; None on anything else.
+
+    Used for ``local_agent_args`` so a malformed YAML entry doesn't crash
+    config load -- worst case the args fall back to defaults at runtime.
+    """
+    if not isinstance(value, list):
+        return None
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            out.append(item)
+    return out
 
 
 def load() -> M3Config:
@@ -139,6 +165,8 @@ def load() -> M3Config:
             ollama_model=_str_or_none(llm_raw.get("ollama_model")),
             anthropic_api_key=_str_or_none(llm_raw.get("anthropic_api_key")),
             anthropic_model=_str_or_none(llm_raw.get("anthropic_model")),
+            local_agent_command=_str_or_none(llm_raw.get("local_agent_command")),
+            local_agent_args=_str_list_or_none(llm_raw.get("local_agent_args")),
         ),
         auth=AuthConfig(
             require_auth=bool(auth_raw.get("require_auth", False)),
@@ -229,6 +257,38 @@ def anthropic_model() -> str:
         or load().llm.anthropic_model
         or "claude-sonnet-4-20250514"
     )
+
+
+def local_agent_command() -> str:
+    """The CLI binary to invoke for the local_agent provider.
+
+    Resolution order: ``LOCAL_AGENT_COMMAND`` env > config.yml > ``"claude"``.
+    The default matches Claude Code, the most common installed agent.
+    """
+    return (
+        os.environ.get("LOCAL_AGENT_COMMAND")
+        or load().llm.local_agent_command
+        or "claude"
+    )
+
+
+def local_agent_args() -> list[str]:
+    """Args passed to the local_agent CLI before its prompt is piped on stdin.
+
+    Resolution order: ``LOCAL_AGENT_ARGS`` env (comma-separated) > config.yml >
+    ``["-p"]``. The default is Claude Code's non-interactive flag and works
+    for most CLIs in our KNOWN_AGENTS table.
+    """
+    env = os.environ.get("LOCAL_AGENT_ARGS")
+    if env is not None:
+        # Comma-separated so a single env var can carry a multi-token list
+        # without shell quoting drama. Empty entries are dropped.
+        return [piece.strip() for piece in env.split(",") if piece.strip()]
+    cfg = load().llm.local_agent_args
+    # ``cfg is None`` means "user never set it" -> fall back to the default.
+    # An explicit empty list ``[]`` means "no args" -- needed for CLIs like
+    # ``mods`` or ``llm`` that take the prompt directly without flags.
+    return list(cfg) if cfg is not None else ["-p"]
 
 
 def auth_required() -> bool:

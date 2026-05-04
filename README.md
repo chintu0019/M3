@@ -1,16 +1,21 @@
 # M3 — Me, Myself, Mine
 
-A self-hosted personal knowledge OS. Share things from anywhere in your life. An LLM organizes it all into a living, evolving knowledge base you browse, graph, and chat with.
+A local-first personal knowledge OS. Forward things into M3, an LLM extracts
+entities and atomic facts into a `~/brain/` markdown corpus, and you chat with
+the result. Single-user. Open-source. Bring your own AI agent.
 
 No prescribed structure. No manual organizing. The system learns how you think.
 
 ## What it does
 
-1. **Capture** from anywhere: Telegram, WhatsApp, email, voice notes, screenshots, URLs, files
-2. **Organize** automatically: an LLM reads what you share, writes wiki pages, creates connections
-3. **Visualize** as an interactive knowledge graph
-4. **Chat** with your entire brain from any device
-5. **Discover** insights and connections you'd never find manually
+1. **Capture** via direct upload (text, files) or a Telegram bot.
+2. **Organize** automatically: an LLM extracts entities + facts into plain
+   markdown under `~/brain/`, builds an entity graph, and surfaces a cluster
+   visualization for each query.
+3. **Chat** with your brain — the agent loop searches, opens entities, and
+   cites the underlying items.
+4. **Bring your own AI CLI.** Reuse the `claude`, `codex`, `gemini`, `aider`,
+   `mods`, or `llm` CLI you already have logged in. No M3-managed API key.
 
 ## Architecture
 
@@ -30,7 +35,13 @@ Earlier phases of the project used a Postgres + MinIO + Redis stack. That's been
 
 - macOS 12+ or Linux (Windows via WSL)
 - A `python3` (3.12+) on your system — the .app uses it to bootstrap its private venv on first launch. Bundling Python directly into the .app is the planned next step.
-- An Anthropic API key, or another supported LLM provider
+- One of:
+  - An **AI CLI you already have** (Claude Code, Codex, Gemini CLI, Aider, mods, llm). M3 detects it on PATH and reuses your existing login — no API key required.
+  - An **Anthropic API key**, or
+  - **Ollama** running locally.
+
+If none of these are present, M3 still launches — it just shows a "pick an
+agent" prompt in Settings and disables chat until you do.
 
 ### From a release build (recommended)
 
@@ -62,7 +73,35 @@ That pulls the latest commits, rebuilds the m3 wheel into `src-tauri/resources/`
 
 ## Configuration
 
-On first run M3 creates `~/.config/m3/config.yml`. Set your LLM API key via the in-app **Settings** page (it's persisted to that file). For headless setups, edit the file directly.
+On first run M3 creates `~/.config/m3/config.yml`. Use the in-app **Settings**
+page (persisted there) for the common case; for headless setups edit the file
+directly.
+
+### Bring your own AI CLI
+
+Settings → **Use my installed AI agent** lists every supported CLI it finds on
+PATH. Click **Use this** for any of:
+
+- **Claude Code** (`claude`) — Anthropic
+- **Codex** (`codex`) — OpenAI
+- **Gemini CLI** (`gemini`) — Google
+- **Aider** (`aider`) — multi-backend coding agent
+- **mods** (`mods`) — Charm's CLI; supports OpenAI + Anthropic
+- **llm** (`llm`) — Simon Willison's plugin ecosystem
+
+Authentication is whatever the CLI is already configured with. If you have a
+Codex Plus subscription wired into the `codex` CLI, M3 picks it up the same
+way it picks up Claude Code Max — no separate key in `~/.config/m3/`.
+
+Got a CLI we don't list? Settings has a **Custom command** form: type the
+binary name and a space-separated arg list, and the same provider runs it.
+Anything that "accepts text on stdin, emits text on stdout" works.
+
+The other two providers in Settings:
+
+- **Ollama** — point at a local instance for fully offline inference.
+- **Anthropic API** — paste an `sk-ant-…` key for direct API access. Best
+  quality + native tool use, but requires Anthropic billing.
 
 ## macOS Gatekeeper
 
@@ -78,7 +117,9 @@ Unsigned `.app` bundles trip Gatekeeper's "Apple cannot check this for malicious
 - **Local-first.** Your brain is markdown on your disk. M3 is a lens, not a vault.
 - **No prescribed structure.** The LLM discovers categories organically.
 - **Open-core.** The platform is MIT. The advanced compilation engine is pluggable and lives in a separate repo.
-- **LLM-agnostic.** Anthropic by default; OpenAI and any OpenAI-compatible endpoint work too.
+- **Bring your own AI agent.** M3 ships zero inference. Pick whichever CLI
+  you already have logged in (Claude Code, Codex, Gemini, Aider, mods, llm)
+  or plug in Anthropic / Ollama directly. Switch in one click in Settings.
 
 ## Release setup (maintainers)
 

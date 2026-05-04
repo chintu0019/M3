@@ -126,7 +126,24 @@ export interface LLMSettings {
   ollama_model: string;
   anthropic_model: string;
   anthropic_api_key_present: boolean;
+  // local_agent: subprocess to a user-installed AI CLI (claude, codex, gemini,
+  // aider, mods, llm, or a custom command). Empty means "use defaults".
+  local_agent_command: string;
+  local_agent_args: string[];
+  // False when the active provider can't be built (no key, missing CLI, etc.).
+  // Settings + Chat render an empty-state CTA when this is false.
+  configured: boolean;
+  unconfigured_reason: string | null;
   env_overrides: string[];
+}
+
+export interface LocalAgentInfo {
+  id: string;
+  command: string;
+  label: string;
+  default_args: string[];
+  available: boolean;
+  path: string | null;
 }
 
 // --- methods ---
@@ -213,11 +230,18 @@ export const api = {
 
   settings: () => request<LLMSettings>("/api/v1/settings"),
 
-  updateSettings: (update: Partial<LLMSettings> & { anthropic_api_key?: string; clear_anthropic_api_key?: boolean }) =>
+  updateSettings: (
+    update: Partial<LLMSettings> & {
+      anthropic_api_key?: string;
+      clear_anthropic_api_key?: boolean;
+    },
+  ) =>
     request<LLMSettings>("/api/v1/settings", {
       method: "PUT",
       body: JSON.stringify(update),
     }),
+
+  listAgents: () => request<LocalAgentInfo[]>("/api/v1/settings/agents"),
 
   cluster: (q: string, k = 15) =>
     request<ClusterResponse>(`/api/v1/cluster?q=${encodeURIComponent(q)}&k=${k}`),
