@@ -13,7 +13,7 @@ services:
       timeout: 3s
       retries: 5
     ports:
-      - "5432:5432"
+      - "${M3_POSTGRES_PORT:-5432}:5432"
 
   redis:
     image: redis:7-alpine
@@ -25,7 +25,7 @@ services:
       timeout: 3s
       retries: 5
     ports:
-      - "6380:6379"
+      - "${M3_REDIS_PORT:-6380}:6379"
 
   minio:
     image: minio/minio
@@ -41,8 +41,8 @@ services:
       timeout: 3s
       retries: 5
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${M3_MINIO_PORT:-9000}:9000"
+      - "${M3_MINIO_CONSOLE_PORT:-9001}:9001"
 
   server:
     build: .
@@ -65,7 +65,7 @@ services:
       - fastembed_cache:/root/.cache/fastembed
       - m3_data:/data
     ports:
-      - "8000:8000"
+      - "${M3_API_PORT:-8000}:8000"
 
   worker:
     build: .
@@ -97,8 +97,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     ports:
-      - "80:80"
-      - "443:443"
+      - "${M3_HTTP_PORT:-80}:80"
+      - "${M3_HTTPS_PORT:-443}:443"
 
 volumes:
   pg_data:

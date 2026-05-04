@@ -113,7 +113,7 @@ export default function Library() {
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl mx-auto">
-          <h1 className="text-2xl font-bold mb-4">Library</h1>
+          <h1 className="text-2xl font-bold mb-4">Documents</h1>
 
           <div className="mb-6">
             <CaptureForm onAfterSend={load} />

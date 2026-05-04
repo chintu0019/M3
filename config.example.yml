@@ -20,17 +20,25 @@ redis:
   url: redis://redis:6379
 
 llm:
-  default_provider: minimax  # Which provider to use: minimax, claude, openrouter, groq, ollama, etc.
+  # local_agent uses your installed AI CLI (Claude Code etc.) and needs no
+  # API key. If `claude` isn't on PATH, switch to `claude` (Anthropic API)
+  # or another provider below via the Settings UI or this file.
+  default_provider: local_agent
   providers:
+    local_agent:
+      type: local_agent
+      command: claude          # any installed CLI: `claude`, `codex`, `gemini`, ...
+      args: ["-p"]             # non-interactive flag for Claude Code
+      model: claude-code        # display label
+    claude:
+      type: anthropic
+      api_key: ""  # Set via ANTHROPIC_API_KEY env var
+      model: claude-sonnet-4-20250514
     minimax:
       type: openai_compatible
       api_key: ""  # Set via MINIMAX_API_KEY env var
       model: MiniMax-M1
       base_url: https://api.minimaxi.chat/v1
-    claude:
-      type: anthropic
-      api_key: ""  # Set via ANTHROPIC_API_KEY env var
-      model: claude-sonnet-4-20250514
     openrouter:
       type: openai_compatible
       api_key: ""  # Set via OPENROUTER_API_KEY env var

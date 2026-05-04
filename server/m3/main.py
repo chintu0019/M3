@@ -178,7 +178,36 @@ if STATIC_DIR.exists():
         return FileResponse(STATIC_DIR / "index.html")
 
 
+def _resolve_port(preferred: int) -> int:
+    """If `preferred` is bound by another process, walk upward until we find a
+    free port. Inside the official Docker image the port is reserved by the
+    container, so this only matters for `m3-server` invoked outside Docker."""
+    import socket
+
+    for offset in range(100):
+        candidate = preferred + offset
+        if candidate > 65535:
+            break
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("0.0.0.0", candidate))
+            except OSError:
+                continue
+        if candidate != preferred:
+            logger.warning(
+                "port %d in use, falling back to %d", preferred, candidate
+            )
+        return candidate
+    raise RuntimeError(f"no free port found near {preferred}")
+
+
 def run():
     """Entry point for m3-server command."""
+    import os
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
-    uvicorn.run("m3.main:app", host="0.0.0.0", port=8000, reload=False)
+    settings = load_settings()
+    preferred = int(os.environ.get("M3_API_PORT", settings.server_port))
+    port = _resolve_port(preferred)
+    uvicorn.run("m3.main:app", host=settings.server_host, port=port, reload=False)
