@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-process": "^2.0.1",
+    "@tauri-apps/plugin-updater": "^2.0.1",
     "@xyflow/react": "^12.10.2",
     "cmdk": "^1.1.1",
     "react": "^19.0.0",

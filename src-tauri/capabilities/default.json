@@ -9,6 +9,8 @@
     "core:webview:default",
     "core:app:default",
     "shell:allow-open",
-    "dialog:allow-message"
+    "dialog:allow-message",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

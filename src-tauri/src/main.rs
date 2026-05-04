@@ -1,25 +1,34 @@
-// M3 desktop shell. Launches `m3 start --port <fixed>` as a child process,
-// waits for the local server's /api/v1/status to reply, then loads the
-// webview pointing at it. On quit, the child is killed.
+// M3 desktop shell.
 //
-// Design: this shell does NOT bundle Python. It requires `m3` on PATH
-// (installed via `pipx install m3` or similar). The rationale is that
-// shipping python-build-standalone + all deps would roughly 4x the bundle
-// size, and M3's target user has a terminal anyway.
+// Responsibilities at launch:
+//   1. Reconcile a private Python venv at <app_data>/runtime/venv with the
+//      m3 wheel bundled inside the .app. On a fresh install or after an
+//      auto-update lands a new wheel, this runs `pip install` once; otherwise
+//      it's a no-op.
+//   2. Spawn `m3 start --port 7007` from that venv as a child process.
+//   3. Wait for the local HTTP server, then navigate the webview from the
+//      static splash to http://127.0.0.1:7007.
 //
-// To later bundle Python, add a `sidecar/` containing python-build-standalone
-// plus the wheels and swap the `find_m3_binary` / `Command::new` calls for
-// `tauri::api::process::Command::new_sidecar("m3")`.
+// Why a managed venv instead of pipx: end users get a single .app and never
+// see a pip/pipx command. The Tauri auto-updater ships a new bundle (with a
+// new wheel inside), and the next launch silently reconciles. The user only
+// sees a "Restart now" banner.
+//
+// Still required on the user's system: a `python3` (3.12+) on PATH or in one
+// of the common Python install locations. Bundling python-build-standalone
+// into the .app to drop that requirement is the planned next step; it would
+// roughly +30 MB to the bundle and let us swap to a fully sealed runtime.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
 const DEFAULT_PORT: u16 = 7007;
 const STARTUP_TIMEOUT_SECS: u64 = 25;
@@ -27,69 +36,182 @@ const STARTUP_TIMEOUT_SECS: u64 = 25;
 /// Handle to the child m3 server, kept alive for the lifetime of the app.
 struct M3Child(Mutex<Option<Child>>);
 
-fn find_m3_binary() -> Option<std::path::PathBuf> {
-    // First, fast-path: honor `M3_BIN` if set (explicit override).
-    if let Ok(v) = std::env::var("M3_BIN") {
-        let p = std::path::PathBuf::from(v);
+// ── Python discovery ────────────────────────────────────────────────────────
+
+fn dirs_like_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn find_system_python() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("M3_PYTHON") {
+        let p = PathBuf::from(v);
         if p.exists() {
             return Some(p);
         }
     }
-
-    // 1. $PATH and common system locations.
-    let direct = [
-        "m3",                           // $PATH (pipx, venv activate, etc.)
-        "/opt/homebrew/bin/m3",         // Homebrew on Apple Silicon
-        "/usr/local/bin/m3",            // Homebrew on Intel, pip --user
-    ];
-    for name in direct {
-        if let Ok(p) = which::which(name) {
+    for cand in ["python3", "python"] {
+        if let Ok(p) = which::which(cand) {
             return Some(p);
         }
     }
-
-    // 2. User-local and toolchain-managed Python installs. Finder-launched
-    //    apps don't inherit the login shell PATH, so these paths are often
-    //    invisible to `which`. We check them explicitly.
-    let home = match dirs_like_home() {
-        Some(h) => h,
-        None => return None,
-    };
-
-    let fixed = [
-        home.join(".local/bin/m3"),              // pipx default, pip --user
-        home.join(".local/share/pipx/venvs/m3/bin/m3"),
-        home.join(".pyenv/shims/m3"),
-        home.join(".asdf/shims/m3"),
-        home.join("miniconda3/bin/m3"),
-        home.join("anaconda3/bin/m3"),
+    let home = dirs_like_home();
+    let mut fixed: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/bin/python3"),
+        PathBuf::from("/usr/local/bin/python3"),
+        PathBuf::from("/usr/bin/python3"),
     ];
-    for p in &fixed {
-        if p.exists() {
-            return Some(p.clone());
-        }
+    if let Some(h) = home {
+        fixed.extend([
+            h.join(".pyenv/shims/python3"),
+            h.join(".asdf/shims/python3"),
+            h.join(".local/bin/python3"),
+        ]);
     }
+    fixed.into_iter().find(|p| p.exists())
+}
 
-    // 3. Glob the mise installs dir — version dirs vary.
-    //    ~/.local/share/mise/installs/python/*/bin/m3
-    let mise_root = home.join(".local/share/mise/installs/python");
-    if let Ok(entries) = std::fs::read_dir(&mise_root) {
+// ── Bundled wheel discovery ─────────────────────────────────────────────────
+
+fn find_bundled_wheel(root: &Path) -> Option<PathBuf> {
+    fn walk(dir: &Path) -> Option<PathBuf> {
+        let entries = std::fs::read_dir(dir).ok()?;
         for entry in entries.flatten() {
-            let candidate = entry.path().join("bin/m3");
-            if candidate.exists() {
-                return Some(candidate);
+            let p = entry.path();
+            if p.is_dir() {
+                if let Some(found) = walk(&p) {
+                    return Some(found);
+                }
+            } else if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("m3-") && name.ends_with(".whl") {
+                    return Some(p);
+                }
             }
         }
+        None
+    }
+    walk(root)
+}
+
+/// Cheap fingerprint to decide "did this wheel change since we last installed".
+/// Size + mtime is robust enough — we don't need a content hash.
+fn wheel_fingerprint(path: &Path) -> std::io::Result<String> {
+    let meta = std::fs::metadata(path)?;
+    let size = meta.len();
+    let mtime = meta
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Ok(format!("{size}-{mtime}"))
+}
+
+// ── Venv management ─────────────────────────────────────────────────────────
+
+fn venv_bin(venv: &Path, name: &str) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Scripts").join(format!("{name}.exe"))
+    } else {
+        venv.join("bin").join(name)
+    }
+}
+
+fn run_capturing(cmd: &mut Command) -> Result<(), String> {
+    let out = cmd.output().map_err(|e| format!("spawn failed: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Err(format!(
+        "exit {}\nstdout: {}\nstderr: {}",
+        out.status,
+        stdout.trim(),
+        stderr.trim()
+    ))
+}
+
+fn create_venv(python: &Path, venv: &Path) -> Result<(), String> {
+    run_capturing(
+        Command::new(python)
+            .args(["-m", "venv", venv.to_str().unwrap()]),
+    )
+    .map_err(|e| format!("python -m venv failed: {e}"))
+}
+
+fn install_wheel(venv: &Path, wheel: &Path) -> Result<(), String> {
+    let pip = venv_bin(venv, "pip");
+    // --upgrade so that bumping versions (or unchanged version with rebuilt
+    // dependencies) actually replaces the installed copy.
+    run_capturing(
+        Command::new(&pip)
+            .args(["install", "--upgrade", "--quiet", wheel.to_str().unwrap()]),
+    )
+    .map_err(|e| format!("pip install failed: {e}"))
+}
+
+/// Reconcile the user-data venv with the bundled wheel and return the path
+/// to the m3 entry point to spawn.
+fn ensure_m3_runtime<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    // Power-user override: useful for `M3_BIN=$(which m3)` when iterating
+    // on the Python side without rebuilding the .app each time.
+    if let Ok(v) = std::env::var("M3_BIN") {
+        let p = PathBuf::from(v);
+        if p.exists() {
+            return Ok(p);
+        }
     }
 
-    None
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource dir unavailable: {e}"))?;
+    let wheel = find_bundled_wheel(&resource_dir).ok_or_else(|| {
+        "Bundled m3 wheel not found in app resources. This is a packaging bug — \
+         scripts/build-wheel.sh must run before `cargo tauri build`."
+            .to_string()
+    })?;
+    let fingerprint = wheel_fingerprint(&wheel)
+        .map_err(|e| format!("could not stat bundled wheel: {e}"))?;
+
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    let runtime_dir = data_dir.join("runtime");
+    let venv_dir = runtime_dir.join("venv");
+    let marker = runtime_dir.join("installed_fingerprint");
+    let m3_bin = venv_bin(&venv_dir, "m3");
+
+    let already_synced = m3_bin.exists()
+        && std::fs::read_to_string(&marker)
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            == Some(fingerprint.as_str());
+    if already_synced {
+        return Ok(m3_bin);
+    }
+
+    std::fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
+
+    if !m3_bin.exists() {
+        let python = find_system_python().ok_or_else(|| {
+            "Python 3.12 or newer was not found on this system. M3 needs Python \
+             to run. Install it from python.org or your package manager and \
+             relaunch."
+                .to_string()
+        })?;
+        if !venv_dir.exists() {
+            create_venv(&python, &venv_dir)?;
+        }
+    }
+
+    install_wheel(&venv_dir, &wheel)?;
+    std::fs::write(&marker, &fingerprint).map_err(|e| e.to_string())?;
+    Ok(m3_bin)
 }
 
-fn dirs_like_home() -> Option<std::path::PathBuf> {
-    // Tauri drags in `dirs` transitively; std::env::var("HOME") is sufficient
-    // and avoids an explicit dep.
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
-}
+// ── Server lifecycle ────────────────────────────────────────────────────────
 
 fn port_is_open(port: u16) -> bool {
     TcpStream::connect_timeout(
@@ -112,16 +234,13 @@ fn wait_for_server(port: u16) -> Result<(), String> {
     ))
 }
 
-fn spawn_m3_server(port: u16) -> Result<Child, String> {
-    let m3 = find_m3_binary().ok_or_else(|| {
-        "M3 CLI not found on PATH. Install it with `pipx install m3` or \
-         make sure `m3` resolves on your $PATH."
-            .to_string()
-    })?;
-    // If something's already bound to the port, assume it's another m3 and
-    // reuse it rather than spawning a duplicate.
+fn spawn_m3_server(m3: &Path, port: u16) -> Result<Child, String> {
     if port_is_open(port) {
-        return Command::new("true").spawn().map_err(|e| e.to_string());
+        // Something already listens — assume it's a dev m3 we want to reuse.
+        return Command::new(if cfg!(windows) { "cmd" } else { "true" })
+            .args(if cfg!(windows) { &["/C", "exit"][..] } else { &[] })
+            .spawn()
+            .map_err(|e| e.to_string());
     }
     Command::new(m3)
         .args(["start", "--port", &port.to_string(), "--host", "127.0.0.1"])
@@ -131,40 +250,49 @@ fn spawn_m3_server(port: u16) -> Result<Child, String> {
         .map_err(|e| format!("failed to spawn m3 start: {e}"))
 }
 
+// ── Entrypoint ──────────────────────────────────────────────────────────────
+
+fn fail_dialog<R: tauri::Runtime>(app: &AppHandle<R>, title: &str, body: &str) -> ! {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    app.dialog()
+        .message(body)
+        .kind(MessageDialogKind::Error)
+        .title(title)
+        .blocking_show();
+    std::process::exit(1);
+}
+
 fn main() {
     let port = DEFAULT_PORT;
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(M3Child(Mutex::new(None)))
         .setup(move |app| {
-            let child = match spawn_m3_server(port) {
-                Ok(c) => c,
-                Err(e) => {
-                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-                    app.dialog()
-                        .message(&e)
-                        .kind(MessageDialogKind::Error)
-                        .title("M3 failed to start")
-                        .blocking_show();
-                    std::process::exit(1);
-                }
-            };
-            if let Err(e) = wait_for_server(port) {
-                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-                app.dialog()
-                    .message(&e)
-                    .kind(MessageDialogKind::Error)
-                    .title("M3 server startup timed out")
-                    .blocking_show();
-                std::process::exit(1);
-            }
-            // Navigate the main window to the local server.
-            let url = format!("http://127.0.0.1:{port}");
-            let window = app.get_webview_window("main").unwrap();
-            let _ = window.navigate(url.parse().unwrap());
+            let handle = app.handle().clone();
 
-            app.state::<M3Child>().0.lock().unwrap().replace(child);
+            let m3_path = match ensure_m3_runtime(&handle) {
+                Ok(p) => p,
+                Err(e) => fail_dialog(&handle, "M3 runtime setup failed", &e),
+            };
+
+            let child = match spawn_m3_server(&m3_path, port) {
+                Ok(c) => c,
+                Err(e) => fail_dialog(&handle, "M3 failed to start", &e),
+            };
+
+            if let Err(e) = wait_for_server(port) {
+                fail_dialog(&handle, "M3 server startup timed out", &e);
+            }
+
+            let url = format!("http://127.0.0.1:{port}");
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.navigate(url.parse().unwrap());
+            }
+
+            handle.state::<M3Child>().0.lock().unwrap().replace(child);
             Ok(())
         })
         .on_window_event(|window, event| {

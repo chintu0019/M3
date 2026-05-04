@@ -11,6 +11,7 @@ import Chat from "./views/Chat";
 import Cluster from "./views/Cluster";
 import Settings from "./views/Settings";
 import IngestDrawer from "./components/IngestDrawer";
+import UpdateBanner from "./components/UpdateBanner";
 
 const tabs = [
   { to: "/search", label: "Search" },
@@ -27,6 +28,7 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-m3-bg text-m3-text">
+      <UpdateBanner />
       <nav className="flex items-center gap-2 px-6 py-3 border-b border-m3-border">
         <span className="font-bold text-lg mr-6">M3</span>
         {tabs.map((t) => (

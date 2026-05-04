@@ -1,0 +1,3 @@
+# Wheels are built into this directory by scripts/build-wheel.sh as part of
+# the release build. They're large, version-specific, and shouldn't be in git.
+*.whl
