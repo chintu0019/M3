@@ -59,7 +59,7 @@ export default function LibraryDetail() {
     if (!confirm("Delete this item? This cannot be undone.")) return;
     try {
       await api.library.delete(item.id);
-      navigate("/library");
+      navigate("/documents");
     } catch (err) {
       alert(`Delete failed: ${err}`);
     }
@@ -68,7 +68,7 @@ export default function LibraryDetail() {
   return (
     <div className="max-w-5xl mx-auto p-6">
       <button onClick={() => navigate(-1)} className="text-m3-muted hover:text-m3-text mb-4 text-sm">
-        ← Back to Library
+        ← Back to Documents
       </button>
 
       <header className="flex items-start justify-between gap-4 mb-6 pb-4 border-b border-m3-border">

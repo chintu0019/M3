@@ -10,7 +10,11 @@ from pydantic import BaseModel
 from m3.api.deps import verify_auth
 from m3.config import LLMProviderConfig
 from m3.core.engines.loader import load_engine
-from m3.core.llm import create_llm_provider
+from m3.core.llm import (
+    UnconfiguredProvider,
+    create_llm_provider,
+    detect_local_agents,
+)
 from m3.schemas.api import SelfContextSettings, ThemeSetting
 from m3.storage.user_settings import UserSettingsStore
 
@@ -34,6 +38,11 @@ class ProviderInfo(BaseModel):
 class LLMSettingsResponse(BaseModel):
     active_provider: str
     providers: list[ProviderInfo]
+    # False on a fresh install where the configured provider can't be built
+    # (no API key, missing CLI binary, etc.). The UI uses this to render an
+    # empty-state prompt instead of letting users hit 500s on every chat.
+    configured: bool = True
+    unconfigured_reason: str | None = None
 
 
 class SwitchProviderRequest(BaseModel):
@@ -42,16 +51,20 @@ class SwitchProviderRequest(BaseModel):
 
 class ProviderCreateRequest(BaseModel):
     name: str
-    type: str = "openai_compatible"  # anthropic or openai_compatible
+    type: str = "openai_compatible"  # anthropic | openai_compatible | local_agent
     model: str
     api_key: str = ""
     base_url: str | None = None
+    command: str | None = None
+    args: list[str] = []
 
 
 class ProviderUpdateRequest(BaseModel):
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
 
 
 # --- Helpers ---
@@ -71,7 +84,15 @@ def _build_response(request: Request) -> LLMSettingsResponse:
             has_api_key=bool(config.api_key),
             active=(name == active),
         ))
-    return LLMSettingsResponse(active_provider=active, providers=providers)
+    llm = getattr(request.app.state, "llm", None)
+    configured = not isinstance(llm, UnconfiguredProvider)
+    reason = None if configured else getattr(llm, "reason", "no provider configured")
+    return LLMSettingsResponse(
+        active_provider=active,
+        providers=providers,
+        configured=configured,
+        unconfigured_reason=reason,
+    )
 
 
 def _rebuild_llm(request: Request) -> None:
@@ -112,8 +133,9 @@ async def switch_provider(
         )
 
     config = settings.llm.providers[body.provider]
-    is_local = config.base_url and ("localhost" in config.base_url or "127.0.0.1" in config.base_url)
-    if not config.api_key and not is_local:
+    is_local_url = config.base_url and ("localhost" in config.base_url or "127.0.0.1" in config.base_url)
+    is_local_agent = config.type == "local_agent"
+    if not config.api_key and not is_local_url and not is_local_agent:
         raise HTTPException(status_code=400, detail=f"Provider '{body.provider}' has no API key set.")
 
     settings.llm.default_provider = body.provider
@@ -137,11 +159,17 @@ async def add_provider(
     if body.name in settings.llm.providers:
         raise HTTPException(status_code=409, detail=f"Provider '{body.name}' already exists.")
 
-    if body.type not in ("anthropic", "openai_compatible"):
-        raise HTTPException(status_code=400, detail="Type must be 'anthropic' or 'openai_compatible'.")
+    if body.type not in ("anthropic", "openai_compatible", "local_agent"):
+        raise HTTPException(
+            status_code=400,
+            detail="Type must be 'anthropic', 'openai_compatible', or 'local_agent'.",
+        )
 
     if body.type == "openai_compatible" and not body.base_url:
         raise HTTPException(status_code=400, detail="openai_compatible providers require a base_url.")
+
+    if body.type == "local_agent" and not body.command:
+        raise HTTPException(status_code=400, detail="local_agent providers require a command (e.g. 'claude').")
 
     # Add to in-memory settings
     provider_config = LLMProviderConfig(
@@ -149,6 +177,8 @@ async def add_provider(
         api_key=body.api_key,
         model=body.model,
         base_url=body.base_url,
+        command=body.command,
+        args=body.args,
     )
     settings.llm.providers[body.name] = provider_config
 
@@ -158,6 +188,8 @@ async def add_provider(
         "api_key": body.api_key,
         "model": body.model,
         "base_url": body.base_url,
+        "command": body.command,
+        "args": body.args,
     })
 
     logger.info(f"Added provider '{body.name}' ({body.type}, {body.model})")
@@ -186,6 +218,10 @@ async def update_provider(
         config.api_key = body.api_key
     if body.base_url is not None:
         config.base_url = body.base_url
+    if body.command is not None:
+        config.command = body.command
+    if body.args is not None:
+        config.args = body.args
 
     # Persist
     store.set_provider(name, {
@@ -193,6 +229,8 @@ async def update_provider(
         "api_key": config.api_key,
         "model": config.model,
         "base_url": config.base_url,
+        "command": config.command,
+        "args": config.args,
     })
 
     # If this is the active provider, rebuild LLM
@@ -224,6 +262,26 @@ async def delete_provider(
 
     logger.info(f"Deleted provider '{name}'")
     return _build_response(request)
+
+
+# --- Local agents (BYO installed AI CLI) ---
+
+
+class LocalAgentInfo(BaseModel):
+    id: str
+    command: str
+    label: str
+    available: bool
+    path: str | None = None
+
+
+@router.get("/agents", response_model=list[LocalAgentInfo])
+async def list_local_agents(_auth: str = Depends(verify_auth)):
+    """Probe PATH for AI CLIs M3 can drive without an API key.
+
+    The Settings UI uses this to render a "use my installed agent" option.
+    """
+    return detect_local_agents()
 
 
 # --- Self-context (Phase D) ---

@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+import shutil
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -392,6 +393,182 @@ class OpenAICompatibleProvider(LLMProvider):
         return normalized
 
 
+# --- Local agent (BYO installed AI CLI, e.g. `claude` from Claude Code) ---
+
+
+# Keep this in sync with detect_local_agents() and the Settings UI.
+LOCAL_AGENTS: list[dict] = [
+    {"id": "claude_code", "command": "claude", "label": "Claude Code"},
+    {"id": "codex", "command": "codex", "label": "OpenAI Codex CLI"},
+    {"id": "gemini", "command": "gemini", "label": "Gemini CLI"},
+]
+
+
+def detect_local_agents() -> list[dict]:
+    """Probe PATH for AI CLIs M3 can drive without an API key."""
+    out: list[dict] = []
+    for spec in LOCAL_AGENTS:
+        path = shutil.which(spec["command"])
+        out.append({
+            "id": spec["id"],
+            "command": spec["command"],
+            "label": spec["label"],
+            "available": bool(path),
+            "path": path,
+        })
+    return out
+
+
+class LocalAgentProvider(LLMProvider):
+    """Drive the user's locally installed AI CLI as the LLM backend.
+
+    The default target is `claude` (Claude Code). Authentication piggybacks on
+    the user's existing login, so a Max-plan subscriber gets full quality
+    without provisioning a separate API key.
+
+    Tool use and vision are off because not every CLI exposes them uniformly;
+    the compilation engine falls back to its text-only JSON-repair path. That
+    is the same path it uses for non-tool OpenAI-compatible providers.
+    """
+
+    supports_tools = False
+    supports_vision = False
+    supports_audio = False
+
+    def __init__(
+        self,
+        command: str = "claude",
+        args: list[str] | None = None,
+        model: str | None = None,
+    ):
+        if not shutil.which(command):
+            raise RuntimeError(
+                f"local agent '{command}' not found on PATH. Install it or pick a different provider."
+            )
+        self.command = command
+        # `-p` runs Claude Code non-interactively and prints the response.
+        # Other CLIs share this convention; override via config if needed.
+        self.args = args if args is not None else ["-p"]
+        self.model = model or command
+
+    @staticmethod
+    def _flatten(messages: list[dict], system: str | None) -> str:
+        parts: list[str] = []
+        if system:
+            parts.append(f"[system]\n{system}")
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = "\n".join(
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                )
+            parts.append(f"[{role}]\n{content}")
+        return "\n\n".join(parts)
+
+    async def complete(
+        self,
+        messages: list[dict],
+        system: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ) -> str:
+        prompt = self._flatten(messages, system)
+        proc = await asyncio.create_subprocess_exec(
+            self.command,
+            *self.args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate(prompt.encode())
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"local agent '{self.command}' failed (exit {proc.returncode}): "
+                f"{stderr.decode(errors='replace').strip()}"
+            )
+        return stdout.decode(errors="replace")
+
+    async def complete_stream(
+        self,
+        messages: list[dict],
+        system: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[str]:
+        prompt = self._flatten(messages, system)
+        proc = await asyncio.create_subprocess_exec(
+            self.command,
+            *self.args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        if proc.stdin:
+            proc.stdin.write(prompt.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+        assert proc.stdout is not None
+        while True:
+            chunk = await proc.stdout.read(256)
+            if not chunk:
+                break
+            yield chunk.decode(errors="replace")
+        ret = await proc.wait()
+        if ret != 0:
+            err = b""
+            if proc.stderr:
+                err = await proc.stderr.read()
+            raise RuntimeError(
+                f"local agent stream failed (exit {ret}): "
+                f"{err.decode(errors='replace').strip()}"
+            )
+
+
+# --- Unconfigured fallback ---------------------------------------------------
+# Used when the configured provider can't be instantiated (no API key, missing
+# CLI binary, etc.). We boot the server cleanly with this in place so the user
+# can pick a real provider in Settings without hitting a 500 on every request.
+
+
+class UnconfiguredProvider(LLMProvider):
+    """Placeholder provider returned when no LLM is configured.
+
+    Every method raises a clear, user-facing error pointing the user at
+    Settings. The server still starts, the UI still loads, and Settings can
+    detect this state via the `configured: false` flag on /api/v1/settings/llm.
+    """
+
+    supports_tools = False
+    supports_vision = False
+    supports_audio = False
+
+    def __init__(self, reason: str = "no provider configured"):
+        self.reason = reason
+        self.model = "(unconfigured)"
+
+    def _fail(self) -> None:
+        raise RuntimeError(
+            f"No LLM is configured ({self.reason}). "
+            "Open Settings and pick an installed agent or add an API key."
+        )
+
+    async def complete(self, *args, **kwargs) -> str:
+        self._fail()
+        raise AssertionError("unreachable")
+
+    async def complete_stream(self, *args, **kwargs):
+        self._fail()
+        if False:  # pragma: no cover -- generator marker
+            yield ""
+
+    async def complete_tool(self, *args, **kwargs):
+        self._fail()
+        raise AssertionError("unreachable")
+
+
 # --- FastEmbed local embedding ---
 
 
@@ -420,17 +597,21 @@ class FastEmbedProvider(EmbeddingProvider):
 # --- Factories ---
 
 
-def create_llm_provider(settings: LLMSettings) -> LLMProvider:
-    provider_config = settings.providers.get(settings.default_provider)
-    if not provider_config:
-        raise ValueError(f"LLM provider '{settings.default_provider}' not configured")
-
+def _build_provider(provider_config) -> LLMProvider:
+    """Construct the provider described by `provider_config`. May raise if the
+    config refers to a CLI binary that isn't on PATH or an API key that's
+    missing -- callers should catch and degrade to UnconfiguredProvider."""
     if provider_config.type == "anthropic":
+        if not provider_config.api_key:
+            raise RuntimeError("anthropic provider has no api_key")
         return AnthropicProvider(api_key=provider_config.api_key, model=provider_config.model)
 
     if provider_config.type == "openai_compatible":
         if not provider_config.base_url:
-            raise ValueError("openai_compatible provider requires a base_url")
+            raise RuntimeError("openai_compatible provider requires a base_url")
+        is_local = "localhost" in provider_config.base_url or "127.0.0.1" in provider_config.base_url
+        if not provider_config.api_key and not is_local:
+            raise RuntimeError("openai_compatible provider has no api_key")
         return OpenAICompatibleProvider(
             api_key=provider_config.api_key,
             model=provider_config.model,
@@ -439,7 +620,37 @@ def create_llm_provider(settings: LLMSettings) -> LLMProvider:
             supports_vision=provider_config.supports_vision,
         )
 
-    raise ValueError(f"Unknown LLM provider type: {provider_config.type}")
+    if provider_config.type == "local_agent":
+        return LocalAgentProvider(
+            command=provider_config.command or "claude",
+            args=list(provider_config.args) if provider_config.args else None,
+            model=provider_config.model,
+        )
+
+    raise RuntimeError(f"unknown LLM provider type: {provider_config.type}")
+
+
+def create_llm_provider(settings: LLMSettings) -> LLMProvider:
+    """Build the active LLM provider, or return an UnconfiguredProvider if it
+    can't be instantiated. The server always starts -- the UI surfaces the
+    unconfigured state and prompts the user to pick a provider in Settings."""
+    provider_config = settings.providers.get(settings.default_provider)
+    if not provider_config:
+        logger.warning(
+            "no provider entry for '%s'; starting in unconfigured state",
+            settings.default_provider,
+        )
+        return UnconfiguredProvider(f"provider '{settings.default_provider}' not defined")
+
+    try:
+        return _build_provider(provider_config)
+    except Exception as exc:
+        logger.warning(
+            "could not initialize '%s' (%s); starting in unconfigured state. "
+            "Pick a provider in Settings.",
+            settings.default_provider, exc,
+        )
+        return UnconfiguredProvider(str(exc))
 
 
 def create_embedding_provider(settings: EmbeddingSettings) -> EmbeddingProvider:

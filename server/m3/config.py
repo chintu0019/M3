@@ -33,7 +33,7 @@ class RedisSettings(BaseModel):
 
 
 class LLMProviderConfig(BaseModel):
-    type: str = "anthropic"  # anthropic, openai_compatible
+    type: str = "anthropic"  # anthropic, openai_compatible, local_agent
     api_key: str = ""
     model: str = "claude-sonnet-4-20250514"
     base_url: str | None = None  # For OpenAI-compatible APIs (MiniMax, OpenRouter, Groq, etc.)
@@ -43,6 +43,10 @@ class LLMProviderConfig(BaseModel):
     # without a tool-capable model should leave these at false.
     supports_tools: bool = False
     supports_vision: bool = False
+    # local_agent only: which CLI to invoke and how. M3 reuses the user's
+    # existing login (e.g. `claude login`) so no api_key is needed.
+    command: str | None = None
+    args: list[str] = []
 
 
 class EmbeddingSettings(BaseModel):
@@ -52,14 +56,22 @@ class EmbeddingSettings(BaseModel):
 
 
 class LLMSettings(BaseModel):
-    default_provider: str = "minimax"
+    # local_agent reuses the user's installed AI CLI (Claude Code etc.) and
+    # works with no API key, so it's the friendliest default. Falls back to
+    # `claude` if available on PATH; the Settings UI lets the user switch.
+    default_provider: str = "local_agent"
     providers: dict[str, LLMProviderConfig] = {
+        "local_agent": LLMProviderConfig(
+            type="local_agent",
+            command="claude",
+            model="claude-code",
+        ),
+        "claude": LLMProviderConfig(),
         "minimax": LLMProviderConfig(
             type="openai_compatible",
             model="MiniMax-M1",
             base_url="https://api.minimaxi.chat/v1",
         ),
-        "claude": LLMProviderConfig(),
     }
     embedding: EmbeddingSettings = EmbeddingSettings()
 

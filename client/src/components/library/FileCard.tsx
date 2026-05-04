@@ -36,7 +36,7 @@ export default function FileCard({ item, selected, onToggleSelect, selectMode }:
       >
         {selected && "✓"}
       </div>
-      <Link to={`/library/${item.id}`} className="flex-1 flex flex-col">
+      <Link to={`/documents/${item.id}`} className="flex-1 flex flex-col">
         <div className="flex items-center justify-between mb-2">
           <span className="text-2xl"><TypeIcon contentType={item.content_type} /></span>
           <StatusBadge status={item.status} />

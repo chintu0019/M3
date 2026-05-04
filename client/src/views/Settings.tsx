@@ -297,6 +297,9 @@ export default function Settings() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [selfContextEnabled, setSelfContextEnabled] = useState(true);
+  const [agents, setAgents] = useState<
+    Array<{ id: string; command: string; label: string; available: boolean; path: string | null }>
+  >([]);
   const { theme, setTheme } = useTheme();
 
   useEffect(() => {
@@ -304,7 +307,36 @@ export default function Settings() {
       .getSelfContext()
       .then((s) => setSelfContextEnabled(s.enabled))
       .catch(() => {});
+    api.settings
+      .listAgents()
+      .then(setAgents)
+      .catch(() => {});
   }, []);
+
+  const useLocalAgent = async (agent: { id: string; command: string; label: string }) => {
+    try {
+      const existing = llmSettings?.providers.find(
+        (p) => p.type === "local_agent" && p.model === agent.command,
+      );
+      if (existing) {
+        setLlmSettings(await api.settings.switchProvider(existing.name));
+        flash(`Now using ${agent.label}`);
+        return;
+      }
+      const name = `local:${agent.id}`;
+      await api.settings.addProvider({
+        name,
+        type: "local_agent",
+        model: agent.command,
+        command: agent.command,
+        args: ["-p"],
+      });
+      setLlmSettings(await api.settings.switchProvider(name));
+      flash(`Now using ${agent.label}`);
+    } catch (err) {
+      flash(`${err}`, "err");
+    }
+  };
 
   const updateSelfContext = async (enabled: boolean) => {
     setSelfContextEnabled(enabled);
@@ -454,6 +486,54 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      {/* Empty-state CTA when the server booted with no usable provider. */}
+      {llmSettings && !llmSettings.configured && (
+        <div className="bg-yellow-900/20 border border-yellow-600/50 text-yellow-100 rounded-xl p-5 mb-6">
+          <h2 className="text-base font-semibold mb-1">Pick an AI agent to get started</h2>
+          <p className="text-sm text-yellow-100/80">
+            M3 is running but no LLM is wired up
+            {llmSettings.unconfigured_reason ? ` (${llmSettings.unconfigured_reason})` : ""}.
+            Choose an installed agent below or add a provider with an API key. Chat and
+            ingestion stay disabled until you do.
+          </p>
+        </div>
+      )}
+
+      {/* Use my installed AI agent (no API key needed) */}
+      {agents.length > 0 && (
+        <div className="bg-m3-surface border border-m3-border rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-1">Use my installed AI agent</h2>
+          <p className="text-sm text-m3-muted mb-4">
+            M3 can drive an AI CLI you already have logged in (Claude Code etc.). No API key needed
+            -- it reuses your existing subscription.
+          </p>
+          <div className="space-y-2">
+            {agents.map((a) => (
+              <div
+                key={a.id}
+                className={`flex items-center justify-between gap-3 border rounded-lg px-3 py-2 ${
+                  a.available ? "border-m3-border" : "border-m3-border/40 opacity-60"
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">{a.label}</div>
+                  <div className="text-xs text-m3-muted truncate">
+                    {a.available ? a.path : `\`${a.command}\` not on PATH -- install it to enable.`}
+                  </div>
+                </div>
+                <button
+                  disabled={!a.available}
+                  onClick={() => useLocalAgent(a)}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-m3-bg border border-m3-border hover:border-m3-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Use this
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* LLM Providers */}
       {llmSettings && (

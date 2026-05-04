@@ -51,7 +51,7 @@ export default function FileRow({ item, selected, onToggleSelect, selectMode }: 
         {selected && "✓"}
       </div>
 
-      <Link to={`/library/${item.id}`} className="flex-1 min-w-0 flex items-center gap-3">
+      <Link to={`/documents/${item.id}`} className="flex-1 min-w-0 flex items-center gap-3">
         <span className="text-lg shrink-0"><TypeIcon contentType={item.content_type} /></span>
         <div className="flex-1 min-w-0">
           <div className="text-sm truncate">{displayName(item)}</div>

@@ -97,6 +97,8 @@ export interface ProviderInfo {
 export interface LLMSettings {
   active_provider: string;
   providers: ProviderInfo[];
+  configured: boolean;
+  unconfigured_reason: string | null;
 }
 
 // --- Entities (Phase 5) ---
@@ -453,18 +455,33 @@ export const api = {
       model: string;
       api_key?: string;
       base_url?: string;
+      command?: string;
+      args?: string[];
     }) =>
       request<LLMSettings>("/api/v1/settings/llm/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       }),
-    updateProvider: (name: string, data: { model?: string; api_key?: string; base_url?: string }) =>
+    updateProvider: (
+      name: string,
+      data: {
+        model?: string;
+        api_key?: string;
+        base_url?: string;
+        command?: string;
+        args?: string[];
+      },
+    ) =>
       request<LLMSettings>(`/api/v1/settings/llm/providers/${encodeURIComponent(name)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       }),
+    listAgents: () =>
+      request<
+        Array<{ id: string; command: string; label: string; available: boolean; path: string | null }>
+      >("/api/v1/settings/agents"),
     deleteProvider: (name: string) =>
       request<LLMSettings>(`/api/v1/settings/llm/providers/${encodeURIComponent(name)}`, {
         method: "DELETE",
