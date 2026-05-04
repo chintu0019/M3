@@ -10,7 +10,11 @@ from pydantic import BaseModel
 from m3.api.deps import verify_auth
 from m3.config import LLMProviderConfig
 from m3.core.engines.loader import load_engine
-from m3.core.llm import create_llm_provider, detect_local_agents
+from m3.core.llm import (
+    UnconfiguredProvider,
+    create_llm_provider,
+    detect_local_agents,
+)
 from m3.schemas.api import SelfContextSettings, ThemeSetting
 from m3.storage.user_settings import UserSettingsStore
 
@@ -34,6 +38,11 @@ class ProviderInfo(BaseModel):
 class LLMSettingsResponse(BaseModel):
     active_provider: str
     providers: list[ProviderInfo]
+    # False on a fresh install where the configured provider can't be built
+    # (no API key, missing CLI binary, etc.). The UI uses this to render an
+    # empty-state prompt instead of letting users hit 500s on every chat.
+    configured: bool = True
+    unconfigured_reason: str | None = None
 
 
 class SwitchProviderRequest(BaseModel):
@@ -75,7 +84,15 @@ def _build_response(request: Request) -> LLMSettingsResponse:
             has_api_key=bool(config.api_key),
             active=(name == active),
         ))
-    return LLMSettingsResponse(active_provider=active, providers=providers)
+    llm = getattr(request.app.state, "llm", None)
+    configured = not isinstance(llm, UnconfiguredProvider)
+    reason = None if configured else getattr(llm, "reason", "no provider configured")
+    return LLMSettingsResponse(
+        active_provider=active,
+        providers=providers,
+        configured=configured,
+        unconfigured_reason=reason,
+    )
 
 
 def _rebuild_llm(request: Request) -> None:

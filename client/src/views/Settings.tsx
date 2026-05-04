@@ -487,6 +487,19 @@ export default function Settings() {
         )}
       </div>
 
+      {/* Empty-state CTA when the server booted with no usable provider. */}
+      {llmSettings && !llmSettings.configured && (
+        <div className="bg-yellow-900/20 border border-yellow-600/50 text-yellow-100 rounded-xl p-5 mb-6">
+          <h2 className="text-base font-semibold mb-1">Pick an AI agent to get started</h2>
+          <p className="text-sm text-yellow-100/80">
+            M3 is running but no LLM is wired up
+            {llmSettings.unconfigured_reason ? ` (${llmSettings.unconfigured_reason})` : ""}.
+            Choose an installed agent below or add a provider with an API key. Chat and
+            ingestion stay disabled until you do.
+          </p>
+        </div>
+      )}
+
       {/* Use my installed AI agent (no API key needed) */}
       {agents.length > 0 && (
         <div className="bg-m3-surface border border-m3-border rounded-xl p-6 mb-6">

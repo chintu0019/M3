@@ -97,6 +97,8 @@ export interface ProviderInfo {
 export interface LLMSettings {
   active_provider: string;
   providers: ProviderInfo[];
+  configured: boolean;
+  unconfigured_reason: string | null;
 }
 
 // --- Entities (Phase 5) ---
