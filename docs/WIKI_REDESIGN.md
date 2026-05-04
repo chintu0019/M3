@@ -1,6 +1,15 @@
 # Wiki Redesign: Entity-Centric Knowledge Graph
 
 > **Tracking document.** Update the status/progress fields and checkboxes as work lands. This persists across sessions.
+>
+> **Post-redesign UI consolidation:** after Phase 7, the client was further
+> collapsed to two sections (`Documents` + `Workspace`). The standalone
+> `Entities`, `Insights`, and `Graph` views, the `ToolDrawer`, the
+> `CommandPalette`, and the hand-rolled D3 + canvas physics engine were
+> deleted. Entity detail now surfaces inline as a side card on the
+> Workspace graph (`react-force-graph-2d`). Insights surface inside the
+> entity detail card -- there is no separate `/insights` route. Library
+> moved to `/documents`. See "Phase 8" below.
 
 ## Why
 
@@ -21,9 +30,12 @@ M3's current wiki treats every uploaded item as a page source. `BasicEngine.comp
 | 5 | Wiki View Rebuild + Graph View | **DONE** | Phase 5 commit |
 | 6 | Backfill + Flip Default | **DONE** | Phase 6 commit |
 | 7 | Cleanup Legacy Code | **DONE** | Phase 7 commit |
+| 8 | UI Consolidation + BYO Agent + Auto-Port | **DONE** | `eac8ca3`, `3f49530` |
 
 Entity mode is the only pipeline. The `wiki_mode` flag, document-pipeline
 methods, legacy `/api/v1/wiki` endpoints, and the old wiki UI are gone.
+The five-pane client has collapsed to two sections (Documents + Workspace),
+and the LLM layer no longer assumes the user has an API key.
 
 ## Design principle: capability-aware engines
 
@@ -266,6 +278,84 @@ against canonical_name and aliases.
 - [x] Delete obsolete `backfill_entities.py` script.
 - [x] Drop `WikiPageLinkedToItem` / linked_wiki_pages / legacy Wiki
       schemas from `schemas/api.py` and the library detail flow.
+
+---
+
+## Phase 8: UI Consolidation + BYO Agent + Auto-Port -- DONE
+
+**What:** After Phase 7 the client was still a five-section app
+(`Canvas`, `Library`, `Entities`, `Insights`, `Settings`) carrying a
+hand-rolled graph layout, a drawer, and a command palette. The LLM layer
+required an API key to start. Host ports were nailed to defaults.
+
+This phase aligned the implementation with the README's "minimal personal
+knowledge OS" promise.
+
+- [x] **Two-section client** -- `client/src/App.tsx`, `Workspace.tsx`,
+      `views/Library.tsx` renamed to Documents-as-route, settings as a
+      gear icon. `Entities`, `Insights`, the old `Canvas`, `ToolDrawer`,
+      `CommandPalette`, all custom canvas components, `useCanvasData`
+      hook, and the d3-* / @xyflow deps removed. Net change: -3940 lines.
+- [x] **Graph rewrite** -- `client/src/components/graph/Graph.tsx` using
+      `react-force-graph-2d`. Auto-sizes via `ResizeObserver`, drag-pin,
+      zoom-thresholded labels. Entity detail surfaces in a side card
+      (`NodeDetailCard.tsx`) on click. Insights render inside that card,
+      not on a separate route.
+- [x] **`LocalAgentProvider`** -- `server/m3/core/llm.py`. Shells out to
+      a user-installed AI CLI (`claude` by default) via subprocess.
+      `supports_tools=False`, so the engine uses the JSON-fallback paths
+      in extract / render / consolidate. Reuses the user's existing CLI
+      login -- no API key.
+- [x] **`UnconfiguredProvider`** -- placeholder when no provider can be
+      built (missing key, missing CLI binary). Server boots clean; every
+      method raises a single user-facing error pointing at Settings.
+      `create_llm_provider` catches construction failures and degrades
+      to it instead of crashing the lifespan.
+- [x] **`/api/v1/settings/agents`** -- probes PATH for the supported
+      CLIs (`claude`, `codex`, `gemini`). Settings UI renders a
+      "Use this" button per detected agent.
+- [x] **`configured` flag** -- `/api/v1/settings/llm` now returns
+      `configured: bool` + `unconfigured_reason: string | null`. The
+      Workspace shows a yellow banner + disables chat input; Settings
+      shows an empty-state card; the nav adds a "pick one" pill and
+      a yellow dot on the gear icon.
+- [x] **Auto-port discovery** -- `scripts/find_free_port.py` +
+      `scripts/setup.sh` walk upward from each preferred port and
+      persist the result to `.env`. `docker-compose.yml` substitutes
+      `${M3_*_PORT:-default}` for every host-side mapping. The server
+      `m3-server` entrypoint also walks upward at runtime if its
+      preferred port is taken (for non-Docker installs).
+- [x] **Docs aligned** -- `README.md` and `docs/PRODUCT_SPEC.md`
+      rewritten to match what's actually built and to drop vaporware
+      capture promises.
+
+**Files added:**
+- `client/src/views/Workspace.tsx`
+- `client/src/components/graph/Graph.tsx`, `NodeDetailCard.tsx`
+- `scripts/find_free_port.py`
+
+**Files removed:**
+- `client/src/views/Canvas.tsx`, `Entities.tsx`, `Insights.tsx`
+- `client/src/components/canvas/{EntityNode,InsightNode,ThreadNode,GraphCanvas,GraphMinimap,GraphToolbar,LinkTypeMenu,NewNodeMenu,NodeEditor,TimeSlider,graphPhysics}.tsx/ts`
+- `client/src/components/canvas/{canvas,graphCanvas}.css`
+- `client/src/components/drawer/ToolDrawer.tsx`
+- `client/src/components/palette/CommandPalette.tsx`
+- `client/src/hooks/useCanvasData.ts`
+- (kept) `client/src/components/canvas/graphStyle.ts` -- still used by
+  `ChatRail` for entity-color hashing.
+
+**Server changes:**
+- `server/m3/core/llm.py`: `LocalAgentProvider`, `UnconfiguredProvider`,
+  `_build_provider` extracted from `create_llm_provider`,
+  `detect_local_agents`.
+- `server/m3/config.py`: `LLMProviderConfig.command/args` for local
+  agent. `LLMSettings.default_provider="local_agent"` with a
+  `local_agent` entry in the providers map.
+- `server/m3/api/settings.py`: `GET /agents`, `configured` flag in the
+  LLM response, `command/args` in add/update bodies, `is_local_agent`
+  carve-out in the no-key check.
+- `server/m3/main.py`: `_resolve_port` walks upward at runtime so
+  `m3-server` outside Docker doesn't fight whatever else is on `:8000`.
 
 ---
 
