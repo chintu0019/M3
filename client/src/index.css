@@ -437,6 +437,246 @@ body { overflow: hidden; }
 }
 
 /* ────────────────────────────────────────────────────────────────────────
+   Settings (lives inside the modal — see m3-modal-* below)
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px 28px;
+}
+
+.m3-settings__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+  margin: 0;
+}
+
+.m3-settings__banner {
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.m3-settings__banner--warn {
+  border-color: oklch(0.55 0.14 60 / 0.5);
+  background: oklch(0.32 0.10 60 / 0.18);
+  color: oklch(0.92 0.10 90);
+}
+.m3-settings__banner--info {
+  border-color: oklch(0.55 0.10 220 / 0.5);
+  background: oklch(0.30 0.06 220 / 0.18);
+  color: oklch(0.92 0.04 220);
+}
+.m3-settings__banner-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.m3-settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.m3-settings__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  border-bottom: 1px solid var(--m3-line);
+  padding-bottom: 8px;
+}
+.m3-settings__head h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+  margin: 0;
+}
+.m3-settings__head-tag {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--m3-accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.m3-settings__hint {
+  font-size: 12.5px;
+  color: var(--m3-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Agent picker rows */
+.m3-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.m3-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  transition: border-color 150ms;
+}
+.m3-agent-row:hover { border-color: var(--m3-line-2); }
+.m3-agent-row[data-unavailable="true"] {
+  opacity: 0.45;
+  background: transparent;
+}
+.m3-agent-row[data-active="true"] {
+  border-color: var(--m3-accent);
+  background: oklch(0.24 0.04 220 / 0.4);
+}
+.m3-agent-row__main {
+  flex: 1;
+  min-width: 0;
+}
+.m3-agent-row__label {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--m3-ink);
+}
+.m3-agent-row__path {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  color: var(--m3-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m3-btn {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+  white-space: nowrap;
+}
+.m3-btn:hover:not(:disabled) {
+  border-color: var(--m3-line-2);
+  background: var(--m3-surface-2);
+}
+.m3-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.m3-btn--primary {
+  background: var(--m3-ink);
+  color: var(--m3-bg);
+  border-color: var(--m3-ink);
+}
+.m3-btn--primary:hover:not(:disabled) {
+  background: var(--m3-ink);
+  border-color: var(--m3-ink);
+  filter: brightness(0.92);
+}
+.m3-btn--accent {
+  background: var(--m3-accent);
+  color: var(--m3-bg);
+  border-color: var(--m3-accent);
+  font-weight: 600;
+}
+.m3-btn--accent:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.m3-btn--ghost {
+  background: transparent;
+  color: var(--m3-muted);
+}
+.m3-btn--small {
+  font-size: 11px;
+  padding: 4px 9px;
+}
+
+/* Custom command escape hatch */
+.m3-agent-custom {
+  border: 1px dashed var(--m3-line);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m3-agent-custom__row {
+  display: flex;
+  gap: 8px;
+}
+.m3-agent-custom__row > input {
+  flex: 1;
+}
+
+/* Form fields */
+.m3-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.m3-field__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+}
+.m3-field__label-tag {
+  color: oklch(0.78 0.14 150);
+  margin-left: 6px;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
+.m3-input {
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  outline: none;
+  transition: border-color 150ms;
+  width: 100%;
+}
+.m3-input:focus { border-color: var(--m3-accent); }
+.m3-input--mono { font-family: "JetBrains Mono", monospace; font-size: 12px; }
+
+.m3-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.m3-row > input { flex: 1; }
+
+.m3-settings__status {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+  height: 16px;
+}
+.m3-settings__status--saving { color: var(--m3-muted); }
+.m3-settings__status--ok     { color: oklch(0.78 0.14 150); }
+.m3-settings__status--error  { color: oklch(0.72 0.18 18); }
+
+/* ────────────────────────────────────────────────────────────────────────
    Settings modal
    ──────────────────────────────────────────────────────────────────────── */
 
@@ -479,7 +719,8 @@ body { overflow: hidden; }
 .m3-modal__body {
   flex: 1;
   overflow: auto;
-  padding: 20px 0;
+  /* No padding — child views (e.g. Settings) own their own padding. */
+  padding: 0;
 }
 
 /* Nicer scrollbars */
