@@ -42,32 +42,84 @@ fn dirs_like_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// The m3 wheel's `requires-python` is `>=3.12`. Stock macOS still ships 3.9
+/// at /usr/bin/python3, so we can't just take the first python on PATH —
+/// every candidate has to pass this probe.
+const MIN_PY_MAJOR: u32 = 3;
+const MIN_PY_MINOR: u32 = 12;
+
+fn python_version_ok(python: &Path) -> bool {
+    let script = format!(
+        "import sys; sys.exit(0 if sys.version_info >= ({MIN_PY_MAJOR}, {MIN_PY_MINOR}) else 1)"
+    );
+    Command::new(python)
+        .args(["-c", &script])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn find_system_python() -> Option<PathBuf> {
     if let Ok(v) = std::env::var("M3_PYTHON") {
         let p = PathBuf::from(v);
-        if p.exists() {
+        if p.exists() && python_version_ok(&p) {
             return Some(p);
         }
     }
-    for cand in ["python3", "python"] {
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // PATH lookups — try newer versions first so we don't accidentally pick
+    // /usr/bin/python3 (3.9 on macOS) over a Homebrew/mise 3.12+.
+    for cand in ["python3.13", "python3.12", "python3", "python"] {
         if let Ok(p) = which::which(cand) {
-            return Some(p);
+            candidates.push(p);
         }
     }
-    let home = dirs_like_home();
-    let mut fixed: Vec<PathBuf> = vec![
+
+    // Fixed system locations — same priority order.
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/python3.13"),
+        PathBuf::from("/opt/homebrew/bin/python3.12"),
         PathBuf::from("/opt/homebrew/bin/python3"),
+        PathBuf::from("/usr/local/bin/python3.13"),
+        PathBuf::from("/usr/local/bin/python3.12"),
         PathBuf::from("/usr/local/bin/python3"),
+        // /usr/bin/python3 is intentionally last — it's macOS's stock 3.9 and
+        // will fail the version probe anyway, but listing it keeps the search
+        // honest.
         PathBuf::from("/usr/bin/python3"),
-    ];
-    if let Some(h) = home {
-        fixed.extend([
-            h.join(".pyenv/shims/python3"),
-            h.join(".asdf/shims/python3"),
-            h.join(".local/bin/python3"),
+    ]);
+
+    if let Some(home) = dirs_like_home() {
+        candidates.extend([
+            home.join(".pyenv/shims/python3"),
+            home.join(".asdf/shims/python3"),
+            home.join(".local/bin/python3"),
         ]);
+
+        // Mise installs live under per-version dirs, e.g.
+        // ~/.local/share/mise/installs/python/3.12.12/bin/python3. Finder-
+        // launched apps don't get the mise shim in PATH so we have to scan.
+        // Sorted descending so the newest version wins.
+        let mise_root = home.join(".local/share/mise/installs/python");
+        if let Ok(entries) = std::fs::read_dir(&mise_root) {
+            let mut found: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path().join("bin/python3"))
+                .filter(|p| p.exists())
+                .collect();
+            found.sort();
+            found.reverse();
+            candidates.extend(found);
+        }
     }
-    fixed.into_iter().find(|p| p.exists())
+
+    candidates
+        .into_iter()
+        .find(|p| p.exists() && python_version_ok(p))
 }
 
 // ── Bundled wheel discovery ─────────────────────────────────────────────────
@@ -194,16 +246,23 @@ fn ensure_m3_runtime<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, S
 
     std::fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
 
-    if !m3_bin.exists() {
+    // A previous run may have left a venv built against an old Python (e.g.
+    // /usr/bin/python3 = 3.9 on macOS, which can't host m3 >= 3.12). Detect
+    // that and rebuild — never reuse a broken interpreter.
+    let venv_python = venv_bin(&venv_dir, "python3");
+    let venv_is_usable = venv_dir.exists() && python_version_ok(&venv_python);
+    if venv_dir.exists() && !venv_is_usable {
+        std::fs::remove_dir_all(&venv_dir).map_err(|e| e.to_string())?;
+    }
+
+    if !venv_is_usable {
         let python = find_system_python().ok_or_else(|| {
             "Python 3.12 or newer was not found on this system. M3 needs Python \
              to run. Install it from python.org or your package manager and \
              relaunch."
                 .to_string()
         })?;
-        if !venv_dir.exists() {
-            create_venv(&python, &venv_dir)?;
-        }
+        create_venv(&python, &venv_dir)?;
     }
 
     install_wheel(&venv_dir, &wheel)?;
