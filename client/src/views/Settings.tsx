@@ -29,6 +29,14 @@ export default function Settings() {
     });
   }, []);
 
+  // ALL hooks must be called before any conditional return — otherwise the
+  // hook count differs between the loading render and the loaded render and
+  // React throws #310 ("Rendered more hooks than during the previous render").
+  const sortedAgents = useMemo(
+    () => [...agents].sort((a, b) => Number(b.available) - Number(a.available)),
+    [agents],
+  );
+
   if (error && !s) {
     return (
       <div className="m3-settings">
@@ -77,11 +85,6 @@ export default function Settings() {
 
   const isAgentActive = (cmd: string) =>
     s.provider === "local_agent" && s.local_agent_command === cmd;
-
-  const sortedAgents = useMemo(
-    () => [...agents].sort((a, b) => Number(b.available) - Number(a.available)),
-    [agents],
-  );
 
   return (
     <div className="m3-settings">
