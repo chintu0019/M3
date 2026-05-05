@@ -89,8 +89,67 @@ jobs:
           tagName: ${{ env.TAG }}
           releaseName: M3 ${{ env.TAG }}
           releaseBody: |
-            Drag the `.app` (macOS) or `.AppImage` (Linux) into your Applications folder.
+            **macOS:** `brew install --cask chintu0019/m3/m3` (after `brew tap chintu0019/m3 https://github.com/chintu0019/M3.git`), or download the `.dmg` below and drag M3 to Applications.
+            **Linux:** download the `.AppImage` or `.deb` below.
+
             Existing installs auto-update via the in-app **Restart now** banner — no manual step needed.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
+
+      - name: Upload macOS DMG for cask updater
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  update-cask:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          # Use the default GITHUB_TOKEN; the push back to main is allowed
+          # because the job declares contents: write.
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: /tmp/dmg
+
+      - name: Bump version + sha256 in Casks/m3.rb
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          DMG=$(find /tmp/dmg -name '*.dmg' -print -quit)
+          if [ -z "$DMG" ]; then
+            echo "no .dmg found in artifact" >&2
+            exit 1
+          fi
+          DMG_SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+          echo "version=$VERSION sha256=$DMG_SHA"
+          sed -i \
+            -e "s|^  version \".*\"|  version \"${VERSION}\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"${DMG_SHA}\"|" \
+            Casks/m3.rb
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          if git diff --quiet Casks/m3.rb; then
+            echo "Cask already up to date, nothing to commit"
+            exit 0
+          fi
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add Casks/m3.rb
+          # [skip ci] avoids a self-trigger loop if main ever runs CI on push.
+          git commit -m "chore(cask): bump M3 to ${TAG} [skip ci]"
+          git push origin main

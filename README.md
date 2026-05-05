@@ -43,9 +43,18 @@ Earlier phases of the project used a Postgres + MinIO + Redis stack. That's been
 If none of these are present, M3 still launches — it just shows a "pick an
 agent" prompt in Settings and disables chat until you do.
 
-### From a release build (recommended)
+### macOS via Homebrew (recommended)
 
-Grab the latest `.app` (macOS) or `.AppImage` (Linux) from [Releases](https://github.com/yourusername/m3/releases) and drag it into `/Applications`. Launch it.
+```bash
+brew tap chintu0019/m3 https://github.com/chintu0019/M3.git
+brew install --cask m3
+```
+
+Cask strips the Gatekeeper quarantine attribute automatically, so M3 launches without the "Apple cannot check this for malicious software" dialog.
+
+### macOS / Linux via direct download
+
+Grab the latest `.dmg` (macOS) or `.AppImage` (Linux) from [Releases](https://github.com/chintu0019/M3/releases) and drag M3 into `/Applications`. Launch it.
 
 On first launch the app sets up its private runtime — this takes ~30s and shows a splash screen. Subsequent launches are instant. Updates land via the in-app **Restart now** banner; the entire stack (shell + Python backend + frontend) updates atomically.
 
