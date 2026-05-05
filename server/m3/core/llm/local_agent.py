@@ -53,12 +53,13 @@ KNOWN_AGENTS: list[dict[str, Any]] = [
         "id": "gemini",
         "command": "gemini",
         "label": "Gemini CLI (Google)",
-        # gemini's `-p/--prompt` takes a value; passing `-p` alone fails with
-        # "Not enough arguments following: p". An empty string keeps the
-        # parser happy, and gemini appends stdin onto the prompt anyway:
-        #   "Run in non-interactive (headless) mode with the given prompt.
-        #    Appended to input on stdin (if any)."
-        "default_args": ["-p", ""],
+        # `-p ""`        — gemini's `-p/--prompt` is a string-valued flag;
+        #                  empty prompt + stdin works headlessly.
+        # `--skip-trust` — gemini refuses to run outside an interactively-
+        #                  trusted workspace, which never applies to a
+        #                  subprocess. The flag opts into single-session
+        #                  trust for headless invocations.
+        "default_args": ["-p", "", "--skip-trust"],
     },
     {
         "id": "aider",
