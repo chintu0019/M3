@@ -102,7 +102,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          # When tauri-action passes `--target <triple>` cargo writes to
+          # target/<triple>/release/..., so we glob both the targetless and
+          # target-specific layouts.
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/*/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
   update-cask:
