@@ -53,7 +53,12 @@ KNOWN_AGENTS: list[dict[str, Any]] = [
         "id": "gemini",
         "command": "gemini",
         "label": "Gemini CLI (Google)",
-        "default_args": ["-p"],
+        # gemini's `-p/--prompt` takes a value; passing `-p` alone fails with
+        # "Not enough arguments following: p". An empty string keeps the
+        # parser happy, and gemini appends stdin onto the prompt anyway:
+        #   "Run in non-interactive (headless) mode with the given prompt.
+        #    Appended to input on stdin (if any)."
+        "default_args": ["-p", ""],
     },
     {
         "id": "aider",
