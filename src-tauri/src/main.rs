@@ -293,6 +293,62 @@ fn wait_for_server(port: u16) -> Result<(), String> {
     ))
 }
 
+/// Build a richer PATH for the spawned m3 server. Finder-launched apps
+/// inherit only the system default PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+/// so the m3 server can't find user-installed AI CLIs (claude in
+/// ~/.local/bin, gemini under mise, etc) via shutil.which(). We prepend
+/// the common bin dirs and every mise installation's bin/ so detection
+/// matches what the user sees in their terminal.
+fn augmented_path() -> String {
+    let mut entries: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = dirs_like_home() {
+        entries.extend([
+            home.join(".local/bin"),
+            home.join(".cargo/bin"),
+            home.join(".pyenv/shims"),
+            home.join(".asdf/shims"),
+        ]);
+
+        // Every mise tool install has a bin/ — globbing them all keeps node /
+        // python / etc. in PATH without parsing mise's config.
+        let mise_root = home.join(".local/share/mise/installs");
+        if let Ok(tools) = std::fs::read_dir(&mise_root) {
+            for tool in tools.flatten() {
+                if let Ok(versions) = std::fs::read_dir(tool.path()) {
+                    for v in versions.flatten() {
+                        let bin = v.path().join("bin");
+                        if bin.is_dir() {
+                            entries.push(bin);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    entries.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+    ]);
+
+    let existing = std::env::var("PATH").unwrap_or_default();
+
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for p in &entries {
+        if p.is_dir() && seen.insert(p.clone()) {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
+    if !existing.is_empty() {
+        out.push(existing);
+    }
+    out.join(":")
+}
+
 fn spawn_m3_server(m3: &Path, port: u16) -> Result<Child, String> {
     if port_is_open(port) {
         // Something already listens — assume it's a dev m3 we want to reuse.
@@ -303,6 +359,7 @@ fn spawn_m3_server(m3: &Path, port: u16) -> Result<Child, String> {
     }
     Command::new(m3)
         .args(["start", "--port", &port.to_string(), "--host", "127.0.0.1"])
+        .env("PATH", augmented_path())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
