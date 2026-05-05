@@ -246,6 +246,9 @@ export const api = {
   cluster: (q: string, k = 15) =>
     request<ClusterResponse>(`/api/v1/cluster?q=${encodeURIComponent(q)}&k=${k}`),
 
+  /** Whole-brain graph: every item + entity with persisted edges. */
+  clusterAll: () => request<ClusterResponse>("/api/v1/cluster/all"),
+
   chat: chatStream,
 
   listChats: () => request<ChatSessionSummary[]>("/api/v1/chats"),

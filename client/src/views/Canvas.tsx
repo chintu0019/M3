@@ -73,9 +73,11 @@ export default function Canvas() {
 
   useEffect(() => { localStorage.setItem("m3-variant", variant); }, [variant]);
 
-  // Initial cluster + settings load
+  // Initial whole-brain graph + settings load. The canvas is at-rest by
+  // default; chat citations highlight subsets of this graph rather than
+  // refetching a topic-scoped cluster on every send.
   useEffect(() => {
-    api.cluster("", 30).then(setCluster).catch(e => setClusterErr(String(e)));
+    api.clusterAll().then(setCluster).catch(e => setClusterErr(String(e)));
     api.settings().then(setSettings).catch(() => {/* not configured / no server yet */});
   }, []);
 
@@ -305,19 +307,17 @@ export default function Canvas() {
     fitTo(layout.state.map(s => s.id));
   }, [fitTo, layout]);
 
-  // Each new chat round: refetch the cluster against the user's prompt so the
-  // graph reflects the topic, and clear the previous round's citation state so
-  // the pulse-and-fit choreography starts fresh.
-  const onSend = useCallback((text: string) => {
+  // Each new chat round resets the citation choreography state but keeps the
+  // graph itself stable — citations from the agent's reply highlight nodes in
+  // the existing whole-brain graph instead of swapping in a topic-scoped one.
+  // The `text` is unused for now; kept on the signature for future use (e.g.
+  // pre-fetching items the agent is likely to cite).
+  const onSend = useCallback((_text: string) => {
     setHighlighted(new Set());
     setCited([]);
     setFlowEdges(new Set());
     setPulseId(null);
     lastCitedRef.current = null;
-    setClusterErr(null);
-    api.cluster(text, 25)
-      .then(setCluster)
-      .catch(e => setClusterErr(String(e)));
   }, []);
 
   const presentLinkKinds: LinkKind[] = useMemo(() => {

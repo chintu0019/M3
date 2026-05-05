@@ -58,14 +58,19 @@ export function deriveCategory(args: {
   kind: string | null;
 }): Category {
   if (args.type === "query") return "self";
-  const tag = (args.entity_type || args.kind || "").toLowerCase();
-  if (!tag) return args.type === "entity" ? "other" : "item";
+  // Items always get the neutral "item" category. Their `kind` is
+  // personal/reference/record/signal — a content-type, not a semantic
+  // category, so we don't try to fold it into the person/concept/etc.
+  // taxonomy (and we don't want "personal" → "person").
+  if (args.type === "item") return "item";
+  const tag = (args.entity_type || "").toLowerCase();
+  if (!tag) return "other";
   if (tag.includes("person") || tag === "people") return "person";
   if (tag.includes("project")) return "project";
   if (tag.includes("concept") || tag.includes("topic")) return "concept";
   if (tag.includes("read") || tag.includes("article") || tag.includes("paper")) return "reading";
   if (tag.includes("decision")) return "decision";
-  return args.type === "entity" ? "other" : "item";
+  return "other";
 }
 
 export function catColor(cat: Category, alpha = 1): string {

@@ -139,3 +139,97 @@ def _ref_name(ref) -> str:
     if isinstance(ref, str):
         return ref.strip()
     return ""
+
+
+async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
+    """Return every item + every entity in the brain, with edges between them.
+    Used as the canvas's "show me my whole brain" view — the chat then
+    highlights subsets of this graph as citations stream in.
+
+    Edges:
+      - item ➜ entity   ("hooks")    — each item's resolved entity_updates
+      - entity ➜ entity ("related")  — undirected, deduped, from entity.related
+    """
+    from m3.brain.layout import BrainPaths
+
+    paths = BrainPaths(brain_root)
+    graph = ClusterGraph()
+    seen: set[str] = set()
+
+    def _add(node: ClusterNode) -> None:
+        if node.id in seen:
+            return
+        seen.add(node.id)
+        graph.nodes.append(node)
+
+    # Entities first so item->entity edges resolve cleanly.
+    if paths.entities_dir.is_dir():
+        for entity_file in sorted(paths.entities_dir.glob("*.md")):
+            slug = entity_file.stem
+            doc = load_entity(brain_root, slug=slug)
+            if doc is None:
+                continue
+            _add(ClusterNode(
+                id=f"entity:{slug}", type="entity",
+                label=doc.canonical_name,
+                entity_type=doc.entity_type,
+                entity_slug=slug,
+            ))
+
+    # Items + their hooked entities.
+    if paths.items_meta.is_dir():
+        for meta_file in sorted(paths.items_meta.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                item_id = _uuid.UUID(meta_file.stem)
+            except ValueError:
+                continue
+            meta = read_meta(brain_root, item_id)
+            if meta is None:
+                continue
+            label = (meta.extracted_text or meta.original_filename or str(item_id))[:60]
+            excerpt = (meta.extracted_text or "")[:280] or None
+            _add(ClusterNode(
+                id=f"item:{item_id}", type="item", label=label,
+                kind=meta.kind, when_iso=meta.when_iso,
+                excerpt=excerpt, item_id=str(item_id),
+            ))
+            # Link to entities mentioned in this item.
+            updates = (meta.llm_output_raw or {}).get("entity_updates") or []
+            for update in updates:
+                if not isinstance(update, dict):
+                    continue
+                name = (update.get("canonical_name") or "").strip()
+                if not name:
+                    continue
+                slug = slugify(name)
+                entity_node_id = f"entity:{slug}"
+                if entity_node_id not in seen:
+                    # Stub the entity even if we don't have a dossier on disk.
+                    _add(ClusterNode(
+                        id=entity_node_id, type="entity", label=name,
+                        entity_type=update.get("entity_type"),
+                        entity_slug=slug,
+                    ))
+                graph.edges.append(ClusterEdge(
+                    source=f"item:{item_id}", target=entity_node_id, kind="hooks",
+                ))
+
+    # Entity-entity related edges, deduped.
+    related_seen: set[tuple[str, str]] = set()
+    for node in list(graph.nodes):
+        if node.type != "entity" or not node.entity_slug:
+            continue
+        doc = load_entity(brain_root, slug=node.entity_slug)
+        if doc is None:
+            continue
+        for related_slug in doc.related or []:
+            target = f"entity:{related_slug}"
+            if target not in seen:
+                continue
+            a, b = sorted([node.id, target])
+            if (a, b) in related_seen:
+                continue
+            related_seen.add((a, b))
+            graph.edges.append(ClusterEdge(source=a, target=b, kind="related"))
+
+    return graph
