@@ -1,0 +1,96 @@
+name: Release
+
+# Trigger by pushing a v*.*.* tag, or run manually from the Actions tab.
+# Each run produces a draft GitHub Release with the .app (macOS) and
+# .AppImage / .deb (Linux), plus a signed `latest.json` the in-app
+# updater fetches.
+#
+# Required repo secret: TAURI_SIGNING_PRIVATE_KEY (the contents of
+# ~/.tauri/m3.key on the maintainer's machine, set via
+# Settings → Secrets and variables → Actions → New repository secret).
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.platform }}
+    env:
+      # github.ref_name is git-ref-restricted, but routing it through env
+      # keeps the workflow free of inline expansion in run: blocks.
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ matrix.platform }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Build m3 wheel
+        run: ./scripts/build-wheel.sh
+
+      - name: Install frontend deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend bundle
+        working-directory: client
+        run: npm run build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        with:
+          projectPath: src-tauri
+          tagName: ${{ env.TAG }}
+          releaseName: M3 ${{ env.TAG }}
+          releaseBody: |
+            Drag the `.app` (macOS) or `.AppImage` (Linux) into your Applications folder.
+            Existing installs auto-update via the in-app **Restart now** banner — no manual step needed.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}

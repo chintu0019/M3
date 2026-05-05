@@ -123,25 +123,38 @@ Unsigned `.app` bundles trip Gatekeeper's "Apple cannot check this for malicious
 
 ## Release setup (maintainers)
 
-The Tauri auto-updater needs two things wired up before it'll actually deliver updates:
+The auto-updater is wired up. The signing pubkey lives in [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) and the release workflow lives at [.github/workflows/release.yml](.github/workflows/release.yml). To cut a release that the in-app **Restart now** banner will pick up:
 
-1. **Generate a signing keypair** (one-time):
+**One-time setup**
+
+1. Generate a private signing key (already done if you're the original maintainer — `~/.tauri/m3.key` exists):
    ```bash
-   cd src-tauri && cargo tauri signer generate -w ~/.tauri/m3.key
+   mkdir -p ~/.tauri
+   cargo tauri signer generate --ci --password "" -w ~/.tauri/m3.key
    ```
-   Keep the private key safe (e.g. as a `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret). Paste the public key into `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
+   This writes the private key to `~/.tauri/m3.key` and the public key to `~/.tauri/m3.key.pub`. The public key is already pasted into `src-tauri/tauri.conf.json#plugins.updater.pubkey` — if you regenerate, update that field.
 
-2. **Publish releases** to a stable URL. The simplest path is GitHub Releases — set `plugins.updater.endpoints` to a `latest.json` you upload alongside the `.app` and `.AppImage` artifacts. A minimal CI workflow looks like:
-   ```yaml
-   - uses: tauri-apps/tauri-action@v0
-     env:
-       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-     with:
-       tagName: v__VERSION__
-       releaseName: 'M3 v__VERSION__'
+2. Add the **private** key as a GitHub Actions secret:
+   - Repo → Settings → Secrets and variables → Actions → New repository secret
+   - Name: `TAURI_SIGNING_PRIVATE_KEY`
+   - Value: the contents of `~/.tauri/m3.key` (paste the whole file)
+
+**Per release**
+
+1. Bump the version in [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) and [server/pyproject.toml](server/pyproject.toml).
+2. Commit, then tag:
+   ```bash
+   git tag v0.1.1 && git push origin v0.1.1
    ```
+3. The release workflow runs on macOS (Apple Silicon) and Linux x86_64, builds the m3 wheel, the React bundle, and the signed Tauri update artifacts, then uploads them as a **draft GitHub Release**.
+4. Review the draft at the repo's Releases page and hit **Publish**. Existing installs see the new version on next launch via the updater banner.
 
-Until both are configured, the updater is a no-op — the app still launches normally.
+If you ever need to test the workflow without cutting a real release, trigger it manually from the Actions tab (`workflow_dispatch`) — it'll still produce a draft Release that you can delete after verifying.
+
+**What the user sees**
+
+- Fresh install: download the `.app` from Releases, drag to Applications, launch.
+- Existing install: a banner appears in the top of the app saying "M3 vX.Y.Z is ready to install" with a **Restart now** button. One click → app exits, swaps in the new bundle, relaunches with the new shell + Python backend.
 
 ## License
 

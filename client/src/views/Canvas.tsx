@@ -305,6 +305,21 @@ export default function Canvas() {
     fitTo(layout.state.map(s => s.id));
   }, [fitTo, layout]);
 
+  // Each new chat round: refetch the cluster against the user's prompt so the
+  // graph reflects the topic, and clear the previous round's citation state so
+  // the pulse-and-fit choreography starts fresh.
+  const onSend = useCallback((text: string) => {
+    setHighlighted(new Set());
+    setCited([]);
+    setFlowEdges(new Set());
+    setPulseId(null);
+    lastCitedRef.current = null;
+    setClusterErr(null);
+    api.cluster(text, 25)
+      .then(setCluster)
+      .catch(e => setClusterErr(String(e)));
+  }, []);
+
   const presentLinkKinds: LinkKind[] = useMemo(() => {
     const set = new Set<LinkKind>();
     for (const l of display.links) set.add(l.kind);
@@ -315,6 +330,7 @@ export default function Canvas() {
     <div className="m3-app" data-variant={variant}>
       <ChatRail
         onTyping={onTyping}
+        onSend={onSend}
         onCitation={handleCitation}
         resolveCitation={resolveCitation}
         cited={cited}

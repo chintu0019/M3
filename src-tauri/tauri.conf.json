@@ -59,9 +59,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/yourusername/m3/releases/latest/download/latest.json"
+        "https://github.com/chintu0019/M3/releases/latest/download/latest.json"
       ],
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3QTUwRDg2NDJEQ0Y2MzcKUldRMzl0eENoZzJsRno2cnRGSjlYeVBrU2RLRHBKSHJ1M0tzN3lqZE5BLy8yRVRWNXBmWjdUb2gK",
       "windows": {
         "installMode": "passive"
       }

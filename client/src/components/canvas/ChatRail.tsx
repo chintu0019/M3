@@ -31,6 +31,10 @@ export interface RailTurn {
 
 export interface ChatRailProps {
   onTyping: (text: string) => void;
+  /** Fires once per chat turn at submit-time (before tokens stream).
+   *  The canvas uses this to refetch the cluster so the graph reflects
+   *  the current query. */
+  onSend: (text: string) => void;
   onCitation: (citedRef: CitedRef) => void;
   resolveCitation: (itemId: string) => CitedRef | null;
   cited: CitedRef[];
@@ -41,7 +45,7 @@ export interface ChatRailProps {
 }
 
 export function ChatRail({
-  onTyping, onCitation, resolveCitation, cited, onCitedClick, onReset,
+  onTyping, onSend, onCitation, resolveCitation, cited, onCitedClick, onReset,
   suggestions,
 }: ChatRailProps) {
   const [turns, setTurns] = useState<RailTurn[]>([]);
@@ -74,6 +78,10 @@ export function ChatRail({
       { role: "assistant", text: "", cites: [], streaming: true },
     ]);
     setStreaming(true);
+    // Tell the canvas to refetch its cluster against the new query so the
+    // graph follows the conversation. Fire-and-forget — fast enough that
+    // by the time citations stream in, the new cluster is usually in place.
+    onSend(text);
 
     let finalText = "";
 
