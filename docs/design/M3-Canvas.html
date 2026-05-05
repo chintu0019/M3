@@ -1,0 +1,1980 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>M3 Canvas — Knowledge Graph</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* M3 Canvas — dark workstation aesthetic */
+
+:root {
+  --bg:      oklch(0.17 0.01 260);
+  --surface: oklch(0.21 0.012 260);
+  --surface-2: oklch(0.24 0.012 260);
+  --line:    oklch(0.32 0.012 260);
+  --line-2:  oklch(0.40 0.014 260);
+  --ink:     oklch(0.96 0.005 260);
+  --muted:   oklch(0.66 0.01 260);
+  --dim:     oklch(0.48 0.008 260);
+  --accent:  oklch(0.78 0.14 220);
+  --ok:      oklch(0.78 0.14 150);
+  --warn:    oklch(0.78 0.16 60);
+  --danger:  oklch(0.72 0.18 18);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, -apple-system, sans-serif; }
+body { overflow: hidden; }
+
+.app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+  background: var(--bg);
+}
+
+/* ----- Chat Rail ----- */
+.chat-rail {
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-rail__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.chat-rail__title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.chat-rail__logo {
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 700;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0;
+}
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.btn-ghost:hover { color: var(--ink); border-color: var(--line-2); }
+
+.chat-rail__scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-rail__empty-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  margin-bottom: 10px;
+}
+
+.chat-rail__prompts { display: flex; flex-direction: column; gap: 8px; }
+
+.prompt-chip {
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+}
+.prompt-chip:hover { background: oklch(0.26 0.014 260); border-color: var(--line-2); }
+
+.turn { display: flex; flex-direction: column; gap: 4px; }
+.turn__role {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.turn--user .turn__role { color: var(--accent); }
+.turn__body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.turn--user .turn__body { color: var(--ink); font-weight: 500; }
+.turn--ai .turn__body { color: oklch(0.86 0.008 260); }
+
+.cite {
+  display: inline;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font: inherit;
+  padding: 0 1px;
+  cursor: pointer;
+  border-bottom: 1px dashed currentColor;
+  transition: background 120ms;
+}
+.cite:hover { background: oklch(0.28 0.014 260); }
+
+.chat-rail__streaming {
+  display: flex; gap: 4px; padding: 6px 0;
+}
+.chat-rail__streaming .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted);
+  animation: m3-blink 1.2s ease-in-out infinite;
+}
+.chat-rail__streaming .dot:nth-child(2) { animation-delay: 0.15s; }
+.chat-rail__streaming .dot:nth-child(3) { animation-delay: 0.30s; }
+@keyframes m3-blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+
+/* Cited panel */
+.cited-panel {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 10px;
+}
+.cited-panel__title {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  margin-bottom: 8px;
+}
+.cited-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.cited-item {
+  width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.cited-item:hover { background: var(--surface-2); border-color: var(--line); }
+.cited-idx {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+}
+.cited-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.cited-name { color: oklch(0.9 0.008 260); }
+
+/* Input */
+.chat-rail__input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.chat-rail__input input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 150ms;
+}
+.chat-rail__input input:focus { border-color: var(--accent); }
+.chat-rail__input button {
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  width: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid; place-items: center;
+}
+.chat-rail__input button:disabled { opacity: 0.4; cursor: default; }
+
+/* ----- Canvas area ----- */
+.canvas-area {
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Cosmos variant gets a subtle starfield */
+.app[data-variant="cosmos"] .canvas-area {
+  background:
+    radial-gradient(circle at 20% 30%, oklch(0.22 0.02 260) 0%, transparent 60%),
+    radial-gradient(circle at 80% 70%, oklch(0.20 0.02 220) 0%, transparent 60%),
+    var(--bg);
+}
+.app[data-variant="blueprint"] .canvas-area {
+  background-image:
+    linear-gradient(to right, oklch(0.22 0.01 260) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.22 0.01 260) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ----- Toolbar (top-right) ----- */
+.toolbar {
+  position: absolute; top: 14px; right: 14px;
+  display: flex; gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  z-index: 10;
+}
+.toolbar__seg, .toolbar__zoom {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.toolbar button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.toolbar button:hover { color: var(--ink); }
+.toolbar button.on { background: var(--surface-2); color: var(--ink); }
+.toolbar__zoom button { padding: 6px 10px; }
+.toolbar__zoom span { padding: 6px 8px; color: var(--ink); }
+
+/* ----- Bottom-right stack ----- */
+.bottom-right {
+  position: absolute; bottom: 14px; right: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  align-items: flex-end;
+  z-index: 10;
+}
+.legend {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.legend__title {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+}
+.legend__row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 0;
+  color: var(--ink);
+}
+.minimap {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+}
+.minimap__label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* ----- Time slider ----- */
+.bottom-center {
+  position: absolute; bottom: 14px; left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 14px;
+  width: 380px;
+  z-index: 10;
+}
+.timeslider__row { display: flex; justify-content: space-between; align-items: baseline; }
+.timeslider__label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+.timeslider__value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink);
+}
+.timeslider__track {
+  position: relative;
+  height: 4px;
+  margin-top: 8px;
+  background: var(--line);
+  border-radius: 2px;
+}
+.timeslider__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.timeslider__track input {
+  position: absolute; inset: -10px 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.timeslider__ends {
+  display: flex; justify-content: space-between;
+  margin-top: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
+/* ----- Tweaks ----- */
+.tweaks {
+  position: absolute; top: 60px; right: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+  width: 220px;
+  z-index: 20;
+}
+.tweaks__title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.tweaks__label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.tweaks__seg {
+  display: flex;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.tweaks__seg button {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 6px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.tweaks__seg button.on { background: var(--ink); color: var(--bg); }
+
+/* ----- Animations ----- */
+@keyframes m3-pulse {
+  0%   { transform: scale(1);   opacity: 1; }
+  100% { transform: scale(3);   opacity: 0; }
+}
+@keyframes m3-flow {
+  0%   { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -26; }
+}
+
+/* Hide scrollbars lightly */
+.chat-rail__scroll::-webkit-scrollbar { width: 6px; }
+.chat-rail__scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// Seed data for M3 knowledge graph prototype.
+// Entities = knowledge units. Links = typed connections.
+
+window.M3_DATA = (() => {
+  // Link types with accent hues (oklch(0.72 0.16 H))
+  const LINK_TYPES = {
+    references:   { label: "references",    hue: 220, dash: null,    desc: "cites or builds upon" },
+    extends:      { label: "extends",       hue: 150, dash: null,    desc: "elaborates / refines" },
+    contradicts:  { label: "contradicts",   hue:  18, dash: "4 4",   desc: "disagrees with" },
+    person:       { label: "person_involved", hue: 70, dash: null,   desc: "human in the loop" },
+    source:       { label: "source",        hue: 300, dash: "1 3",   desc: "raw capture origin" },
+    related:      { label: "related",       hue: 260, dash: "6 4",   desc: "loose association" },
+  };
+
+  // Categories inform cluster regions
+  const CATEGORIES = {
+    project:  { label: "Projects",  hue: 220 },
+    concept:  { label: "Concepts",  hue: 150 },
+    person:   { label: "People",    hue:  70 },
+    reading:  { label: "Reading",   hue: 300 },
+    decision: { label: "Decisions", hue:  18 },
+    self:     { label: "Self",      hue: 340 },
+  };
+
+  // Entities — each has an id, name, type (category), a short overview,
+  // a capture date, and a "weight" (how connected).
+  const nodes = [
+    // Self
+    { id: "self",         name: "Kiran",               cat: "self",     overview: "The one doing the thinking. Seeded from capture patterns.", created: "2026-01-04", facts: 42 },
+
+    // Projects
+    { id: "kato",         name: "Kato AI",             cat: "project",  overview: "Solo AI coding assistant. Current focus: pricing & GTM.", created: "2026-01-12", facts: 28 },
+    { id: "pilotpath",    name: "PilotPath",           cat: "project",  overview: "Pre-flight checklist SaaS for GA pilots.", created: "2026-02-03", facts: 14 },
+    { id: "monisub",      name: "MoniSub",             cat: "project",  overview: "Subscription monitoring tool (shelved, Feb).", created: "2026-02-10", facts: 6 },
+
+    // Concepts
+    { id: "rag",          name: "RAG pipelines",       cat: "concept",  overview: "Retrieval-augmented generation patterns.", created: "2026-01-20", facts: 11 },
+    { id: "pgvector",     name: "pgvector",            cat: "concept",  overview: "Postgres extension for semantic search.", created: "2026-01-22", facts: 5 },
+    { id: "transformers", name: "Transformer arch",    cat: "concept",  overview: "Self-attention, scaling laws, MoE notes.", created: "2026-02-14", facts: 9 },
+    { id: "pricing",      name: "Pricing strategy",    cat: "concept",  overview: "Usage vs seat vs hybrid. Value metrics.", created: "2026-02-02", facts: 17 },
+    { id: "plg",          name: "Product-led growth",  cat: "concept",  overview: "Self-serve funnels, activation moments.", created: "2026-02-08", facts: 12 },
+    { id: "orgdesign",    name: "Organic structure",   cat: "concept",  overview: "Schema that emerges from use, not ahead of it.", created: "2026-03-01", facts: 7 },
+
+    // People
+    { id: "john",         name: "John Smith",          cat: "person",   overview: "Ex-Stripe. Advising on pricing. Met at GEC.", created: "2026-01-18", facts: 8 },
+    { id: "maya",         name: "Maya Okonkwo",        cat: "person",   overview: "ML researcher, friend. Shares papers.", created: "2026-02-05", facts: 6 },
+    { id: "devon",        name: "Devon Rhee",          cat: "person",   overview: "PilotPath co-conspirator. GA pilot.", created: "2026-02-03", facts: 4 },
+
+    // Reading
+    { id: "lethain",      name: "Lethain on pricing",  cat: "reading",  overview: "Blog post on value-metric pricing.", created: "2026-02-01", facts: 3 },
+    { id: "attention",    name: "Attention Is All You Need", cat: "reading", overview: "Canonical transformer paper.", created: "2026-02-14", facts: 4 },
+    { id: "zeropricing", reading: true, name: "Zero to One — pricing ch.", cat: "reading", overview: "Thiel on monopoly pricing power.", created: "2026-02-09", facts: 2 },
+
+    // Decisions
+    { id: "d_usage",      name: "Go usage-based",      cat: "decision", overview: "Chose usage pricing for Kato, Mar 28.", created: "2026-03-28", facts: 5 },
+    { id: "d_shelve",     name: "Shelve MoniSub",      cat: "decision", overview: "Paused MoniSub to focus on Kato.", created: "2026-02-28", facts: 3 },
+    { id: "d_pgvector",   name: "Use pgvector",        cat: "decision", overview: "No separate vector DB. Keep stack thin.", created: "2026-01-25", facts: 2 },
+  ];
+
+  // Links — typed
+  const links = [
+    // Self → projects
+    { s: "self", t: "kato",       type: "person" },
+    { s: "self", t: "pilotpath",  type: "person" },
+    { s: "self", t: "monisub",    type: "person" },
+
+    // Kato cluster
+    { s: "kato", t: "rag",        type: "references" },
+    { s: "kato", t: "pricing",    type: "references" },
+    { s: "kato", t: "plg",        type: "references" },
+    { s: "kato", t: "d_usage",    type: "extends" },
+    { s: "kato", t: "pgvector",   type: "references" },
+    { s: "kato", t: "john",       type: "person" },
+
+    // Pricing cluster
+    { s: "pricing", t: "lethain", type: "source" },
+    { s: "pricing", t: "zeropricing", type: "source" },
+    { s: "pricing", t: "plg",     type: "related" },
+    { s: "pricing", t: "d_usage", type: "extends" },
+    { s: "john",    t: "pricing", type: "references" },
+    { s: "zeropricing", t: "lethain", type: "contradicts" },
+
+    // RAG / ML cluster
+    { s: "rag", t: "pgvector",    type: "references" },
+    { s: "rag", t: "transformers",type: "related" },
+    { s: "transformers", t: "attention", type: "source" },
+    { s: "maya", t: "attention",  type: "source" },
+    { s: "maya", t: "transformers", type: "references" },
+    { s: "d_pgvector", t: "pgvector", type: "references" },
+    { s: "d_pgvector", t: "rag",  type: "extends" },
+
+    // PilotPath
+    { s: "pilotpath", t: "devon", type: "person" },
+    { s: "pilotpath", t: "plg",   type: "references" },
+
+    // MoniSub
+    { s: "monisub", t: "d_shelve", type: "extends" },
+    { s: "d_shelve", t: "kato",    type: "references" },
+
+    // Org design cross-cuts
+    { s: "orgdesign", t: "kato",      type: "related" },
+    { s: "orgdesign", t: "pilotpath", type: "related" },
+  ];
+
+  // Conversation scripts — each scripted turn lists which entity ids light up in order.
+  const scenarios = [
+    {
+      id: "pricing",
+      prompt: "What did I decide about pricing for Kato, and why?",
+      preHighlight: ["kato", "pricing", "d_usage"],
+      reply: [
+        { text: "You landed on ", cite: null },
+        { text: "usage-based pricing for Kato", cite: "d_usage" },
+        { text: " on Mar 28. The reasoning traces back to three places. " , cite: null },
+        { text: "John's feedback", cite: "john" },
+        { text: " pushed you toward value metrics — he'd seen flat seat pricing cap revenue at Stripe. ", cite: null },
+        { text: "Lethain's post", cite: "lethain" },
+        { text: " gave you the mental model: pick the metric that grows with customer success. And your ", cite: null },
+        { text: "Kato project notes", cite: "kato" },
+        { text: " from Feb 18 explicitly framed token usage as the natural metric.\n\nWorth flagging: this ", cite: null },
+        { text: "contradicts the Thiel chapter", cite: "zeropricing" },
+        { text: " you saved — he'd argue monopoly pricing beats usage. You haven't resolved that tension in writing.", cite: null },
+      ],
+    },
+    {
+      id: "people",
+      prompt: "Who's advising me across projects?",
+      preHighlight: ["john", "maya", "devon"],
+      reply: [
+        { text: "Three people show up in your active projects.\n\n" },
+        { text: "John Smith", cite: "john" },
+        { text: " — pricing & GTM for ", cite: null },
+        { text: "Kato", cite: "kato" },
+        { text: ". Ex-Stripe, met at GEC in January. 8 captures mention him.\n\n", cite: null },
+        { text: "Maya Okonkwo", cite: "maya" },
+        { text: " — sends you ML papers. Most recently the ", cite: null },
+        { text: "transformer paper", cite: "attention" },
+        { text: ". Not directly on Kato yet, but adjacent.\n\n", cite: null },
+        { text: "Devon Rhee", cite: "devon" },
+        { text: " is your ", cite: null },
+        { text: "PilotPath", cite: "pilotpath" },
+        { text: " co-conspirator. GA pilot, domain expert.", cite: null },
+      ],
+    },
+    {
+      id: "stack",
+      prompt: "Why am I using pgvector instead of a dedicated vector DB?",
+      preHighlight: ["d_pgvector", "pgvector", "rag"],
+      reply: [
+        { text: "You decided on ", cite: null },
+        { text: "pgvector", cite: "d_pgvector" },
+        { text: " on Jan 25 — before you started ", cite: null },
+        { text: "Kato", cite: "kato" },
+        { text: " proper. The note reads: \"keep the stack thin.\" One Postgres, one backup story, one thing to operate.\n\n", cite: null },
+        { text: "pgvector itself", cite: "pgvector" },
+        { text: " handles your ", cite: null },
+        { text: "RAG", cite: "rag" },
+        { text: " needs up to ~1M vectors comfortably. You'll revisit if latency becomes a problem.", cite: null },
+      ],
+    },
+    {
+      id: "shelved",
+      prompt: "What did I shelve and why?",
+      preHighlight: ["monisub", "d_shelve", "kato"],
+      reply: [
+        { text: "You paused ", cite: null },
+        { text: "MoniSub", cite: "monisub" },
+        { text: " on Feb 28. The ", cite: null },
+        { text: "decision note", cite: "d_shelve" },
+        { text: " is short: \"MoniSub can wait. Kato won't.\" You were splitting attention across three things and ", cite: null },
+        { text: "Kato", cite: "kato" },
+        { text: " had the most momentum — pricing conversations were live, early users were in.", cite: null },
+      ],
+    },
+  ];
+
+  return { nodes, links, scenarios, LINK_TYPES, CATEGORIES };
+})();
+
+// Live force-directed layout with drag + hover repulsion.
+window.M3Layout = (function () {
+  function init(nodes, links, opts = {}) {
+    const W = opts.width || 1600;
+    const H = opts.height || 1000;
+    const cx = W / 2, cy = H / 2;
+
+    const catAngles = {};
+    const cats = Array.from(new Set(nodes.map(n => n.cat)));
+    cats.forEach((c, i) => { catAngles[c] = (i / cats.length) * Math.PI * 2; });
+
+    const state = nodes.map((n, i) => {
+      const a = catAngles[n.cat] + (i % 5) * 0.15;
+      const r = n.cat === "self" ? 0 : 260 + (i % 3) * 60;
+      return {
+        id: n.id,
+        x: cx + Math.cos(a) * r + (Math.random() - 0.5) * 20,
+        y: cy + Math.sin(a) * r + (Math.random() - 0.5) * 20,
+        vx: 0, vy: 0,
+        pinned: n.cat === "self",
+        dragging: false,
+        cat: n.cat,
+        degree: 0,
+      };
+    });
+    const byId = new Map(state.map(s => [s.id, s]));
+
+    links.forEach(l => {
+      const a = byId.get(l.s), b = byId.get(l.t);
+      if (a) a.degree++;
+      if (b) b.degree++;
+    });
+
+    const self = byId.get("self");
+    if (self) { self.x = cx; self.y = cy; self.pinned = true; }
+
+    // Direct neighbors of self — these should orbit self at a fixed radius
+    // so the ego layout is readable at a glance.
+    const selfNeighbors = new Set();
+    links.forEach(l => {
+      if (l.s === "self") selfNeighbors.add(l.t);
+      else if (l.t === "self") selfNeighbors.add(l.s);
+    });
+    // Give each neighbor an angular slot so they spread evenly around self
+    // rather than piling up on one side.
+    const neighList = Array.from(selfNeighbors);
+    neighList.forEach((id, i) => {
+      const s = byId.get(id);
+      if (!s) return;
+      s.angleSlot = (i / neighList.length) * Math.PI * 2;
+      // seed position on the ring so initial settle is fast
+      s.x = cx + Math.cos(s.angleSlot) * 260;
+      s.y = cy + Math.sin(s.angleSlot) * 260;
+    });
+
+    const params = {
+      repulse: 9000,
+      linkDist: 180,
+      linkK: 0.04,
+      centerK: 0.002,
+      damp: 0.82,
+      catK: 0.0012,
+      // Hover-repel is now opt-in (disabled by default — it was fighting the user
+      // when they tried to grab a node). Left in so we can turn it back on via UI.
+      mouseRepel: 0,
+      mouseRadius: 150,
+      dragRepel: 24000,
+      // Ego layout: neighbors of "self" orbit self at a fixed radius.
+      selfOrbit: 260,
+      selfOrbitK: 0.018,
+    };
+
+    const pointer = { x: 0, y: 0, active: false };
+    let draggingId = null;
+    let targetPos = null;
+
+    function setMouse(x, y, active) {
+      pointer.x = x; pointer.y = y; pointer.active = active;
+    }
+    function setDrag(id, x, y) {
+      draggingId = id;
+      targetPos = (id == null) ? null : { x, y };
+      state.forEach(s => { s.dragging = s.id === id; });
+    }
+    function updateDragTarget(x, y) {
+      if (targetPos) { targetPos.x = x; targetPos.y = y; }
+    }
+    function releaseDrag() {
+      draggingId = null;
+      targetPos = null;
+      state.forEach(s => { s.dragging = false; });
+    }
+
+    function catCenters() {
+      const m = new Map();
+      state.forEach(s => {
+        if (!m.has(s.cat)) m.set(s.cat, { x: 0, y: 0, n: 0 });
+        const c = m.get(s.cat); c.x += s.x; c.y += s.y; c.n++;
+      });
+      for (const c of m.values()) { c.x /= c.n; c.y /= c.n; }
+      return m;
+    }
+
+    function step() {
+      for (let i = 0; i < state.length; i++) {
+        const a = state[i];
+        for (let j = i + 1; j < state.length; j++) {
+          const b = state[j];
+          let dx = a.x - b.x, dy = a.y - b.y;
+          let d2 = dx * dx + dy * dy;
+          if (d2 < 1) { d2 = 1; dx = 1; dy = 0; }
+          const repel = (a.dragging || b.dragging) ? params.dragRepel : params.repulse;
+          const f = repel / d2;
+          const d = Math.sqrt(d2);
+          const fx = (dx / d) * f, fy = (dy / d) * f;
+          a.vx += fx; a.vy += fy;
+          b.vx -= fx; b.vy -= fy;
+        }
+      }
+      links.forEach(l => {
+        const a = byId.get(l.s), b = byId.get(l.t);
+        if (!a || !b) return;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const diff = d - params.linkDist;
+        const fx = (dx / d) * diff * params.linkK;
+        const fy = (dy / d) * diff * params.linkK;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
+      });
+      const centers = catCenters();
+      state.forEach(s => {
+        const c = centers.get(s.cat);
+        if (!c) return;
+        s.vx += (c.x - s.x) * params.catK;
+        s.vy += (c.y - s.y) * params.catK;
+      });
+      // Self-neighbor orbit force — pull direct neighbors toward their
+      // angular slot on a ring around self, so the ego structure stays legible.
+      neighList.forEach((id) => {
+        const s = byId.get(id);
+        if (!s || s.dragging || s.pinned) return;
+        const tx = cx + Math.cos(s.angleSlot) * params.selfOrbit;
+        const ty = cy + Math.sin(s.angleSlot) * params.selfOrbit;
+        s.vx += (tx - s.x) * params.selfOrbitK;
+        s.vy += (ty - s.y) * params.selfOrbitK;
+      });
+      state.forEach(s => {
+        s.vx += (cx - s.x) * params.centerK;
+        s.vy += (cy - s.y) * params.centerK;
+      });
+      if (pointer.active) {
+        const R = params.mouseRadius, R2 = R * R;
+        state.forEach(s => {
+          if (s.dragging) return;
+          const dx = s.x - pointer.x, dy = s.y - pointer.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < R2 && d2 > 0.01) {
+            const d = Math.sqrt(d2);
+            const falloff = 1 - d / R;
+            const f = (params.mouseRepel * falloff * falloff) / d2;
+            s.vx += (dx / d) * f;
+            s.vy += (dy / d) * f;
+          }
+        });
+      }
+      if (draggingId != null && targetPos) {
+        const s = byId.get(draggingId);
+        if (s) {
+          s.vx = (targetPos.x - s.x) * 0.6;
+          s.vy = (targetPos.y - s.y) * 0.6;
+        }
+      }
+      state.forEach(s => {
+        if (s.pinned) { s.vx = 0; s.vy = 0; return; }
+        if (s.dragging) { s.x += s.vx; s.y += s.vy; return; }
+        s.vx *= params.damp; s.vy *= params.damp;
+        s.x += s.vx; s.y += s.vy;
+      });
+    }
+
+    for (let i = 0; i < 500; i++) step();
+
+    return {
+      state, byId, step,
+      setMouse, setDrag, updateDragTarget, releaseDrag,
+      setParams(next) { Object.assign(params, next); },
+      width: W, height: H,
+    };
+  }
+  return { init };
+})();
+
+</script>
+<script type="text/babel">
+// M3 Canvas — SVG-rendered force-directed graph with chat-driven highlighting.
+// Reads window.M3_DATA and window.M3Layout.
+
+const { useEffect, useMemo, useRef, useState, useCallback } = React;
+
+const DATA = window.M3_DATA;
+
+// Viewport hook
+function useSize(ref) {
+  const [size, setSize] = useState({ w: 1000, h: 700 });
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const r = e.contentRect;
+        setSize({ w: r.width, h: r.height });
+      }
+    });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, [ref]);
+  return size;
+}
+
+// Category color helper
+function catColor(cat, a = 1) {
+  const h = DATA.CATEGORIES[cat]?.hue ?? 260;
+  return `oklch(0.72 0.14 ${h} / ${a})`;
+}
+function linkColor(type, a = 1) {
+  const h = DATA.LINK_TYPES[type]?.hue ?? 260;
+  return `oklch(0.72 0.16 ${h} / ${a})`;
+}
+
+function Canvas({
+  variant,                 // "cosmos" | "blueprint"
+  showHulls = true,        // render category halos
+  highlighted,             // Set of entity ids spotlighted
+  trail,                   // array of {from, to} for the trail
+  onNodeClick,
+  hoverEdge,
+  setHoverEdge,
+  pulseId,                 // id that should pulse right now
+  flowEdges,               // Set of `${s}→${t}` keys that should animate flow
+  preHighlight,            // Set of ids to subtly highlight while typing
+  timeCutoff,              // ISO date string or null
+  viewRef,                 // ref to the outer element
+  layoutData,              // { state, byId, width, height }
+  cameraRef,               // mutable { x, y, k }
+  cameraVersion,           // bumps on camera change
+  onCamera,                // setter for camera
+}) {
+  const svgRef = useRef(null);
+
+  const { state: nodeState, byId, width: LW, height: LH } = layoutData;
+
+  // Zoom level determines semantic LOD
+  const k = cameraRef.current.k;
+  const lodCard = k > 1.2;
+  const lodLabel = k > 0.55;
+
+  // Stable refs so interaction listeners don't re-attach every render/tick
+  const onCameraRef = useRef(onCamera);
+  const onNodeClickRef = useRef(onNodeClick);
+  useEffect(() => { onCameraRef.current = onCamera; }, [onCamera]);
+  useEffect(() => { onNodeClickRef.current = onNodeClick; }, [onNodeClick]);
+
+  // Pan / zoom / node-drag / hover-repel — attached ONCE
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    let panning = false, sx = 0, sy = 0, startCam = null;
+    let draggingNodeId = null;
+    let didDrag = false;
+    let downPos = null;
+
+    function onWheel(e) {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const cam = cameraRef.current;
+      const worldX = (mx - cam.x) / cam.k;
+      const worldY = (my - cam.y) / cam.k;
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      const newK = Math.max(0.25, Math.min(3.5, cam.k * factor));
+      cam.k = newK;
+      cam.x = mx - worldX * newK;
+      cam.y = my - worldY * newK;
+      onCameraRef.current && onCameraRef.current();
+    }
+
+    function onDown(e) {
+      if (e.button !== 0) return;
+      downPos = { x: e.clientX, y: e.clientY };
+      didDrag = false;
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const cam = cameraRef.current;
+      const world = { x: (mx - cam.x) / cam.k, y: (my - cam.y) / cam.k };
+      // hit-test nearest node within 28 screen-px
+      let hit = null, hitD2 = Infinity;
+      const hitR = 28 / cam.k;
+      const hitR2 = hitR * hitR;
+      for (const s of layoutData.state) {
+        const dx = s.x - world.x, dy = s.y - world.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < hitR2 && d2 < hitD2) { hit = s; hitD2 = d2; }
+      }
+      if (hit && !hit.pinned) {
+        draggingNodeId = hit.id;
+        layoutData.setDrag(hit.id, world.x, world.y);
+        el.style.cursor = "grabbing";
+        e.preventDefault();
+      } else if (hit && hit.pinned) {
+        draggingNodeId = "__pinned__" + hit.id;
+        e.preventDefault();
+      } else {
+        panning = true;
+        sx = e.clientX; sy = e.clientY;
+        startCam = { ...cam };
+        el.style.cursor = "grabbing";
+      }
+    }
+
+    function onMove(e) {
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const cam = cameraRef.current;
+      const world = { x: (mx - cam.x) / cam.k, y: (my - cam.y) / cam.k };
+      const overCanvas = mx >= 0 && my >= 0 && mx <= rect.width && my <= rect.height;
+      layoutData.setMouse(world.x, world.y, overCanvas && !draggingNodeId);
+      if (downPos && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) didDrag = true;
+      if (draggingNodeId && !draggingNodeId.startsWith("__pinned__")) {
+        layoutData.updateDragTarget(world.x, world.y);
+      } else if (panning) {
+        cam.x = startCam.x + (e.clientX - sx);
+        cam.y = startCam.y + (e.clientY - sy);
+        onCameraRef.current && onCameraRef.current();
+      }
+    }
+
+    function onUp() {
+      if (draggingNodeId) {
+        const id = draggingNodeId.startsWith("__pinned__")
+          ? draggingNodeId.slice("__pinned__".length)
+          : draggingNodeId;
+        layoutData.releaseDrag();
+        if (!didDrag) onNodeClickRef.current && onNodeClickRef.current(id);
+      }
+      draggingNodeId = null;
+      panning = false;
+      startCam = null;
+      downPos = null;
+      el.style.cursor = "grab";
+    }
+
+    function onLeave() { layoutData.setMouse(0, 0, false); }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    el.addEventListener("mouseleave", onLeave);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      el.removeEventListener("mouseleave", onLeave);
+    };
+  }, [cameraRef, layoutData]);
+
+  const camStyle = `translate(${cameraRef.current.x}px, ${cameraRef.current.y}px) scale(${cameraRef.current.k})`;
+
+  // Time-gate helper
+  const visibleAt = (iso) => !timeCutoff || iso <= timeCutoff;
+
+  const hasHL = highlighted && highlighted.size > 0;
+
+  // Cluster hulls (simple: bounding bubble per category)
+  const hulls = useMemo(() => {
+    const byCat = new Map();
+    nodeState.forEach(s => {
+      const n = byId.get(s.id);
+      if (!byCat.has(s.cat)) byCat.set(s.cat, []);
+      byCat.get(s.cat).push(s);
+    });
+    const out = [];
+    for (const [cat, arr] of byCat) {
+      if (arr.length < 2) continue;
+      let cx = 0, cy = 0;
+      arr.forEach(a => { cx += a.x; cy += a.y; });
+      cx /= arr.length; cy /= arr.length;
+      let r = 0;
+      arr.forEach(a => {
+        const d = Math.hypot(a.x - cx, a.y - cy);
+        if (d > r) r = d;
+      });
+      out.push({ cat, cx, cy, r: r + 70 });
+    }
+    return out;
+  }, [nodeState, byId]);
+
+  return (
+    <div ref={svgRef} className="m3-canvas" style={{ position: "absolute", inset: 0, overflow: "hidden", cursor: "grab" }}>
+      <svg width="100%" height="100%" style={{ display: "block" }}>
+        <defs>
+          <radialGradient id="nodeHalo" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="white" stopOpacity="0.8"/>
+            <stop offset="60%" stopColor="white" stopOpacity="0.12"/>
+            <stop offset="100%" stopColor="white" stopOpacity="0"/>
+          </radialGradient>
+          {Object.entries(DATA.LINK_TYPES).map(([key, def]) => (
+            <marker key={key} id={`arrow-${key}`} viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={linkColor(key, 0.9)} />
+            </marker>
+          ))}
+          <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+
+        <g style={{ transform: camStyle, transformOrigin: "0 0" }}>
+          {/* Cluster regions */}
+          {showHulls && variant === "cosmos" && hulls.map(h => (
+            <circle key={h.cat} cx={h.cx} cy={h.cy} r={h.r}
+              fill={catColor(h.cat, 0.035)}
+              stroke={catColor(h.cat, 0.18)}
+              strokeDasharray="2 6"
+              strokeWidth={1}
+            />
+          ))}
+          {showHulls && variant === "blueprint" && hulls.map(h => (
+            <g key={h.cat}>
+              <rect x={h.cx - h.r} y={h.cy - h.r} width={h.r*2} height={h.r*2}
+                fill="none"
+                stroke={catColor(h.cat, 0.22)}
+                strokeDasharray="2 4"
+                strokeWidth={1}
+              />
+              <text x={h.cx - h.r + 8} y={h.cy - h.r + 14}
+                fill={catColor(h.cat, 0.85)}
+                fontFamily="'JetBrains Mono', monospace"
+                fontSize="10"
+                style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+              >{DATA.CATEGORIES[h.cat].label}</text>
+            </g>
+          ))}
+
+          {/* Edges */}
+          {DATA.links.map((l, i) => {
+            const a = byId.get(l.s), b = byId.get(l.t);
+            if (!a || !b) return null;
+            const aNode = DATA.nodes.find(n => n.id === l.s);
+            const bNode = DATA.nodes.find(n => n.id === l.t);
+            if (!visibleAt(aNode.created) || !visibleAt(bNode.created)) return null;
+
+            const key = `${l.s}→${l.t}`;
+            const isFlowing = flowEdges && flowEdges.has(key);
+            const isHL = hasHL && highlighted.has(l.s) && highlighted.has(l.t);
+            const dim = hasHL && !isHL;
+            const hover = hoverEdge === i;
+
+            const base = linkColor(l.type, dim ? 0.08 : (isHL ? 1 : 0.45));
+            const sw = isHL ? 2.2 : (isFlowing ? 2 : 1);
+            const dash = DATA.LINK_TYPES[l.type].dash;
+
+            // Trim endpoints to node rim so edges don't overlap the node discs.
+            // Radii mirror NodeMark: r = 8 + sqrt(degree)*3, plus a tiny gap.
+            const ra = (l.s === "self" ? 32 : 8 + Math.sqrt(a.degree || 1) * 3) + 4;
+            const rb = (l.t === "self" ? 32 : 8 + Math.sqrt(b.degree || 1) * 3) + 4;
+            const edx = b.x - a.x, edy = b.y - a.y;
+            const elen = Math.hypot(edx, edy) || 1;
+            const ax = a.x + (edx / elen) * ra;
+            const ay = a.y + (edy / elen) * ra;
+            const bx = b.x - (edx / elen) * rb;
+            const by = b.y - (edy / elen) * rb;
+
+            // Slight curve
+            const mx = (ax + bx) / 2;
+            const my = (ay + by) / 2;
+            const dx = bx - ax, dy = by - ay;
+            const nx = -dy, ny = dx;
+            const nlen = Math.hypot(nx, ny) || 1;
+            const curve = variant === "cosmos" ? 0.12 : 0.04;
+            const offset = Math.hypot(dx, dy) * curve;
+            const qx = mx + (nx / nlen) * offset;
+            const qy = my + (ny / nlen) * offset;
+            const d = `M ${ax} ${ay} Q ${qx} ${qy} ${bx} ${by}`;
+
+            return (
+              <g key={i}>
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={base}
+                  strokeWidth={sw}
+                  strokeDasharray={dash}
+                  filter={(isHL || isFlowing) && variant === "cosmos" ? "url(#softGlow)" : undefined}
+                  style={{ transition: "stroke 220ms, stroke-width 220ms, opacity 220ms" }}
+                />
+                {/* flow animation: dashed pulse traveling along */}
+                {isFlowing && (
+                  <path d={d} fill="none"
+                    stroke={linkColor(l.type, 1)}
+                    strokeWidth={sw + 1}
+                    strokeDasharray="8 18"
+                    style={{ animation: "m3-flow 1.2s linear infinite" }}
+                    filter="url(#softGlow)"
+                  />
+                )}
+                {/* fat invisible path for hover */}
+                <path d={d} fill="none" stroke="transparent" strokeWidth={14}
+                  onMouseEnter={() => setHoverEdge(i)}
+                  onMouseLeave={() => setHoverEdge(null)}
+                  style={{ pointerEvents: "stroke", cursor: "help" }}
+                />
+                {/* label when hovered or highlighted */}
+                {(hover || isHL) && lodLabel && (
+                  <g transform={`translate(${qx}, ${qy})`} style={{ pointerEvents: "none" }}>
+                    <rect x={-44} y={-9} width={88} height={18} rx={2}
+                      fill="oklch(0.18 0.01 260)" stroke={linkColor(l.type, 0.8)} strokeWidth={0.8}/>
+                    <text textAnchor="middle" y={3}
+                      fill={linkColor(l.type, 1)}
+                      fontFamily="'JetBrains Mono', monospace"
+                      fontSize="9"
+                      style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+                    >{DATA.LINK_TYPES[l.type].label}</text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
+
+          {/* Trail overlay */}
+          {trail && trail.map((seg, i) => {
+            const a = byId.get(seg.from), b = byId.get(seg.to);
+            if (!a || !b) return null;
+            return (
+              <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                stroke="oklch(0.92 0.08 80)"
+                strokeWidth={1.5}
+                strokeDasharray="2 6"
+                opacity={0.9}
+                filter="url(#softGlow)"
+              />
+            );
+          })}
+
+          {/* Nodes — render self last so it sits on top */}
+          {[...nodeState].sort((a,b) => (a.id==="self"?1:0) - (b.id==="self"?1:0)).map(s => {
+            const n = DATA.nodes.find(nn => nn.id === s.id);
+            if (!visibleAt(n.created)) return null;
+            const hl = hasHL && highlighted.has(s.id);
+            const dim = hasHL && !hl;
+            const pre = preHighlight && preHighlight.has(s.id);
+            const isPulse = pulseId === s.id;
+            const r = n.id === "self" ? 32 : 8 + Math.sqrt(s.degree) * 3;
+            return (
+              <NodeMark key={s.id} node={n} s={s}
+                variant={variant}
+                hl={hl} dim={dim} pre={pre} isPulse={isPulse}
+                lodCard={lodCard} lodLabel={lodLabel}
+                radius={r}
+              />
+            );
+          })}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+function NodeMark({ node, s, variant, hl, dim, pre, isPulse, lodCard, lodLabel, radius }) {
+  const color = catColor(node.cat, 1);
+  const colorDim = catColor(node.cat, 0.25);
+  const fill = variant === "cosmos" ? "oklch(0.22 0.012 260)" : "oklch(0.20 0.01 260)";
+
+  return (
+    <g data-node={node.id}
+       transform={`translate(${s.x}, ${s.y})`}
+       style={{ cursor: s.pinned ? "default" : "grab", opacity: dim ? 0.22 : 1, transition: "opacity 220ms" }}>
+      {/* halo for cosmos / crisp ring for blueprint */}
+      {variant === "cosmos" && (hl || isPulse) && (
+        <circle r={radius + 18} fill="url(#nodeHalo)" opacity={hl ? 0.6 : 0.4}/>
+      )}
+      {isPulse && (
+        <circle r={radius} fill="none" stroke={color} strokeWidth={2}
+          style={{ animation: "m3-pulse 1.4s ease-out" }} />
+      )}
+      {pre && !hl && (
+        <circle r={radius + 5} fill="none" stroke={color} strokeWidth={1} strokeDasharray="2 3" opacity={0.7}/>
+      )}
+
+      {variant === "cosmos" ? (
+        <>
+          {node.id === "self" ? (
+            <>
+              {/* Self — the ego node. Concentric rings + monogram. */}
+              <circle r={radius + 24} fill="none" stroke={color} strokeWidth={0.8}
+                strokeDasharray="1 4" opacity={0.55}/>
+              <circle r={radius + 10} fill="none" stroke={color} strokeWidth={0.6} opacity={0.4}/>
+              <circle r={radius} fill="oklch(0.26 0.06 340)" stroke={color} strokeWidth={1.5}
+                filter="url(#softGlow)"/>
+              <text textAnchor="middle" y={6}
+                fill="oklch(0.98 0.005 260)"
+                fontFamily="Inter, system-ui, sans-serif"
+                fontSize={radius * 0.7} fontWeight={600}
+                style={{ pointerEvents: "none" }}
+              >{node.name[0]}</text>
+            </>
+          ) : (
+            <>
+              <circle r={radius} fill={fill} stroke={hl ? color : colorDim} strokeWidth={hl ? 2 : 1}
+                filter={hl ? "url(#softGlow)" : undefined}/>
+              <circle r={radius * 0.4} fill={hl ? color : colorDim}/>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          {node.id === "self" ? (
+            <>
+              <rect x={-radius} y={-radius} width={radius * 2} height={radius * 2}
+                fill="oklch(0.24 0.05 340)" stroke={color} strokeWidth={1.4}/>
+              <rect x={-radius + 4} y={-radius + 4} width={radius * 2 - 8} height={radius * 2 - 8}
+                fill="none" stroke={color} strokeWidth={0.5} opacity={0.5}/>
+              <text textAnchor="middle" y={5}
+                fill="oklch(0.98 0.005 260)"
+                fontFamily="'JetBrains Mono', monospace"
+                fontSize={radius * 0.6} fontWeight={600}
+                style={{ pointerEvents: "none", letterSpacing: "0.04em" }}
+              >{node.name[0]}</text>
+            </>
+          ) : (
+            <>
+              <rect x={-radius} y={-radius} width={radius * 2} height={radius * 2}
+                fill={fill} stroke={hl ? color : colorDim} strokeWidth={hl ? 1.6 : 1}/>
+              <rect x={-radius + 3} y={-radius + 3} width={radius * 2 - 6} height={2}
+                fill={hl ? color : colorDim} opacity={0.6}/>
+            </>
+          )}
+        </>
+      )}
+
+      {/* Label + card */}
+      {lodLabel && !lodCard && node.id !== "self" && (
+        <g transform={`translate(0, ${radius + 14})`} style={{ pointerEvents: "none" }}>
+          <text textAnchor="middle"
+            fill={hl ? "oklch(0.98 0.005 260)" : "oklch(0.78 0.01 260)"}
+            fontFamily="Inter, system-ui, sans-serif"
+            fontSize="11"
+            fontWeight={hl ? 600 : 500}
+          >{node.name}</text>
+        </g>
+      )}
+      {lodCard && (
+        <g transform={`translate(${radius + 10}, ${-radius})`} style={{ pointerEvents: "none" }}>
+          <rect x={0} y={0} width={220} height={68} rx={variant === "cosmos" ? 8 : 0}
+            fill="oklch(0.22 0.012 260 / 0.96)"
+            stroke={hl ? color : "oklch(0.3 0.008 260)"} strokeWidth={hl ? 1.2 : 1}/>
+          <text x={12} y={20}
+            fill="oklch(0.96 0.005 260)"
+            fontFamily="Inter, system-ui, sans-serif"
+            fontSize="12" fontWeight={600}
+          >{node.name}</text>
+          <text x={12} y={34}
+            fill={color}
+            fontFamily="'JetBrains Mono', monospace"
+            fontSize="9"
+            style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+          >{DATA.CATEGORIES[node.cat].label} · {node.facts} facts</text>
+          <foreignObject x={12} y={38} width={200} height={26}>
+            <div style={{
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 10.5, lineHeight: 1.3,
+              color: "oklch(0.72 0.01 260)",
+              overflow: "hidden",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+            }}>{node.overview}</div>
+          </foreignObject>
+        </g>
+      )}
+    </g>
+  );
+}
+
+window.M3Canvas = Canvas;
+window.M3_catColor = catColor;
+window.M3_linkColor = linkColor;
+
+</script>
+<script type="text/babel">
+// Left chat rail + cited-nodes sidebar
+const { useEffect: useEffect2, useState: useState2, useRef: useRef2 } = React;
+
+function ChatRail({
+  onScenario,       // fn(scenarioId)
+  onTyping,         // fn(text)
+  cited,            // array of {id, name, cat} in order
+  onCitedClick,     // fn(id)
+  streaming,
+  onReset,
+  turns,            // [{role, parts: [{text, cite}]}]
+  onSend,
+}) {
+  const [input, setInput] = useState2("");
+  const scrollRef = useRef2(null);
+
+  useEffect2(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [turns]);
+
+  useEffect2(() => { onTyping(input); }, [input]);
+
+  function submit(e) {
+    e.preventDefault();
+    if (!input.trim() || streaming) return;
+    onSend(input.trim());
+    setInput("");
+  }
+
+  const scenarios = DATA.scenarios;
+
+  return (
+    <aside className="chat-rail">
+      <header className="chat-rail__head">
+        <div className="chat-rail__title">
+          <span className="chat-rail__logo">M3</span>
+          <span>Conversation</span>
+        </div>
+        <button className="btn-ghost" onClick={onReset} title="New conversation">
+          <svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 8h10M8 3v10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+        </button>
+      </header>
+
+      <div className="chat-rail__scroll" ref={scrollRef}>
+        {turns.length === 0 && (
+          <div className="chat-rail__empty">
+            <div className="chat-rail__empty-label">Try asking</div>
+            <div className="chat-rail__prompts">
+              {scenarios.map(s => (
+                <button key={s.id} className="prompt-chip"
+                  onClick={() => onScenario(s.id)}>
+                  {s.prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {turns.map((t, i) => (
+          <ChatTurn key={i} turn={t} onCitedClick={onCitedClick}/>
+        ))}
+
+        {streaming && (
+          <div className="chat-rail__streaming">
+            <span className="dot"/><span className="dot"/><span className="dot"/>
+          </div>
+        )}
+      </div>
+
+      {cited.length > 0 && (
+        <div className="cited-panel">
+          <div className="cited-panel__title">Cited, in order</div>
+          <ol className="cited-list">
+            {cited.map((c, i) => (
+              <li key={i}>
+                <button className="cited-item" onClick={() => onCitedClick(c.id)}>
+                  <span className="cited-idx">{String(i+1).padStart(2, "0")}</span>
+                  <span className="cited-dot" style={{ background: window.M3_catColor(c.cat) }}/>
+                  <span className="cited-name">{c.name}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      <form className="chat-rail__input" onSubmit={submit}>
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Ask your knowledge base…"
+          disabled={streaming}
+        />
+        <button type="submit" disabled={!input.trim() || streaming}>
+          <svg width="14" height="14" viewBox="0 0 16 16">
+            <path d="M2 8h11M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+      </form>
+    </aside>
+  );
+}
+
+function ChatTurn({ turn, onCitedClick }) {
+  if (turn.role === "user") {
+    return (
+      <div className="turn turn--user">
+        <div className="turn__role">You</div>
+        <div className="turn__body">{turn.text}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="turn turn--ai">
+      <div className="turn__role">M3</div>
+      <div className="turn__body">
+        {turn.parts.map((p, i) => {
+          if (!p.cite) return <span key={i}>{p.text}</span>;
+          const node = DATA.nodes.find(n => n.id === p.cite);
+          return (
+            <button key={i}
+              className="cite"
+              onClick={() => onCitedClick(p.cite)}
+              style={{
+                borderBottomColor: node ? window.M3_catColor(node.cat, 0.9) : "currentColor",
+              }}
+            >
+              {p.text}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+window.M3ChatRail = ChatRail;
+
+</script>
+<script type="text/babel">
+// Minimap, time slider, toolbar
+const { useMemo: useMemo3 } = React;
+
+function Minimap({ layoutData, camera, viewSize, highlighted, cameraRef, onCamera }) {
+  const { state, width: LW, height: LH } = layoutData;
+  const MW = 180, MH = 120;
+
+  // Scale world to minimap
+  const pad = 40;
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  state.forEach(s => {
+    if (s.x < minX) minX = s.x;
+    if (s.y < minY) minY = s.y;
+    if (s.x > maxX) maxX = s.x;
+    if (s.y > maxY) maxY = s.y;
+  });
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const w = maxX - minX, h = maxY - minY;
+  const s = Math.min(MW / w, MH / h);
+
+  const toMini = (x, y) => [(x - minX) * s, (y - minY) * s];
+
+  // Viewport rect in world coords
+  const cam = camera;
+  const vx1 = (-cam.x) / cam.k;
+  const vy1 = (-cam.y) / cam.k;
+  const vx2 = vx1 + viewSize.w / cam.k;
+  const vy2 = vy1 + viewSize.h / cam.k;
+  const [rx1, ry1] = toMini(vx1, vy1);
+  const [rx2, ry2] = toMini(vx2, vy2);
+
+  return (
+    <div className="minimap">
+      <div className="minimap__label">MAP</div>
+      <svg width={MW} height={MH} style={{ display: "block" }}>
+        {/* Category bubbles */}
+        {Object.keys(window.M3_DATA.CATEGORIES).map(cat => {
+          const nodes = state.filter(n => n.cat === cat);
+          if (!nodes.length) return null;
+          let cx=0, cy=0;
+          nodes.forEach(n => { cx += n.x; cy += n.y; });
+          cx /= nodes.length; cy /= nodes.length;
+          let r = 0;
+          nodes.forEach(n => { r = Math.max(r, Math.hypot(n.x-cx, n.y-cy)); });
+          const [mx, my] = toMini(cx, cy);
+          return <circle key={cat} cx={mx} cy={my} r={(r+40)*s}
+            fill={window.M3_catColor(cat, 0.06)}
+            stroke={window.M3_catColor(cat, 0.3)} strokeWidth={0.6}/>;
+        })}
+        {state.map(n => {
+          const [x, y] = toMini(n.x, n.y);
+          const hl = highlighted && highlighted.has(n.id);
+          return <circle key={n.id} cx={x} cy={y} r={hl ? 3 : 1.5}
+            fill={hl ? window.M3_catColor(n.cat) : window.M3_catColor(n.cat, 0.6)}/>;
+        })}
+        <rect x={rx1} y={ry1} width={rx2-rx1} height={ry2-ry1}
+          fill="none" stroke="oklch(0.96 0.005 260 / 0.6)" strokeWidth={1}/>
+      </svg>
+    </div>
+  );
+}
+
+function TimeSlider({ value, onChange, min, max }) {
+  const days = (iso) => Math.floor(new Date(iso).getTime() / 86400000);
+  const minD = days(min), maxD = days(max);
+  const curD = days(value);
+  const pct = ((curD - minD) / (maxD - minD)) * 100;
+  return (
+    <div className="timeslider">
+      <div className="timeslider__row">
+        <div className="timeslider__label">TIME</div>
+        <div className="timeslider__value">as of {value}</div>
+      </div>
+      <div className="timeslider__track">
+        <div className="timeslider__fill" style={{ width: `${pct}%` }}/>
+        <input
+          type="range"
+          min={minD} max={maxD} value={curD}
+          onChange={e => {
+            const d = parseInt(e.target.value, 10);
+            const iso = new Date(d * 86400000).toISOString().slice(0, 10);
+            onChange(iso);
+          }}
+        />
+      </div>
+      <div className="timeslider__ends">
+        <span>{min}</span>
+        <span>now</span>
+      </div>
+    </div>
+  );
+}
+
+function Toolbar({ variant, setVariant, onFit, onReset, zoom, setZoom }) {
+  return (
+    <div className="toolbar">
+      <div className="toolbar__seg">
+        <button className={variant === "cosmos" ? "on" : ""} onClick={() => setVariant("cosmos")}>Cosmos</button>
+        <button className={variant === "blueprint" ? "on" : ""} onClick={() => setVariant("blueprint")}>Blueprint</button>
+      </div>
+      <div className="toolbar__zoom">
+        <button onClick={() => setZoom(zoom / 1.2)} aria-label="Zoom out">−</button>
+        <span>{Math.round(zoom * 100)}%</span>
+        <button onClick={() => setZoom(zoom * 1.2)} aria-label="Zoom in">+</button>
+        <button onClick={onFit}>Fit</button>
+      </div>
+    </div>
+  );
+}
+
+function Legend() {
+  return (
+    <div className="legend">
+      <div className="legend__title">LINKS</div>
+      {Object.entries(window.M3_DATA.LINK_TYPES).map(([k, v]) => (
+        <div key={k} className="legend__row">
+          <svg width="28" height="8">
+            <line x1="0" y1="4" x2="28" y2="4"
+              stroke={window.M3_linkColor(k, 0.95)}
+              strokeWidth="1.5"
+              strokeDasharray={v.dash || undefined}/>
+          </svg>
+          <span className="legend__label">{v.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+window.M3Minimap = Minimap;
+window.M3TimeSlider = TimeSlider;
+window.M3Toolbar = Toolbar;
+window.M3Legend = Legend;
+
+</script>
+<script type="text/babel">
+// Main app: wires canvas + chat + panels, drives the live-highlight stream.
+const { useEffect: useE, useState: useS, useMemo: useM, useRef: useR, useCallback: useC } = React;
+
+function App() {
+  const TWEAKS = /*EDITMODE-BEGIN*/{
+    "hoverRepel": false,
+    "selfOrbit": 350,
+    "edgeCurve": 0.12,
+    "showHulls": true
+  }/*EDITMODE-END*/;
+  const [tweaks, setTweaks] = useS(TWEAKS);
+  const [tweaksOpen, setTweaksOpen] = useS(false);
+
+  useE(() => {
+    function onMsg(e) {
+      const d = e.data || {};
+      if (d.type === "__activate_edit_mode") setTweaksOpen(true);
+      else if (d.type === "__deactivate_edit_mode") setTweaksOpen(false);
+    }
+    window.addEventListener("message", onMsg);
+    window.parent.postMessage({ type: "__edit_mode_available" }, "*");
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  function setTweak(k, v) {
+    setTweaks(t => {
+      const nt = { ...t, [k]: v };
+      window.parent.postMessage({ type: "__edit_mode_set_keys", edits: { [k]: v } }, "*");
+      return nt;
+    });
+  }
+
+  const [variant, setVariant] = useS(localStorage.getItem("m3-variant") || "cosmos");
+  const [turns, setTurns] = useS([]);
+  const [streaming, setStreaming] = useS(false);
+  const [highlighted, setHighlighted] = useS(new Set());
+  const [preHighlight, setPreHighlight] = useS(new Set());
+  const [trail, setTrail] = useS([]);
+  const [flowEdges, setFlowEdges] = useS(new Set());
+  const [cited, setCited] = useS([]);
+  const [pulseId, setPulseId] = useS(null);
+  const [hoverEdge, setHoverEdge] = useS(null);
+  const [timeCutoff, setTimeCutoff] = useS("2026-04-18");
+  const [camVer, setCamVer] = useS(0);
+  const [tick, setTick] = useS(0);
+  const cancelRef = useR({ cancelled: false });
+
+  useE(() => { localStorage.setItem("m3-variant", variant); }, [variant]);
+
+  // Apply tweakable sim params
+  useE(() => {
+    if (layoutData && layoutData.setParams) {
+      layoutData.setParams({
+        mouseRepel: tweaks.hoverRepel ? 16000 : 0,
+        selfOrbit: tweaks.selfOrbit,
+      });
+    }
+  }, [tweaks.hoverRepel, tweaks.selfOrbit]);
+
+
+  const layoutData = useM(() => window.M3Layout.init(window.M3_DATA.nodes, window.M3_DATA.links, { width: 1600, height: 1100 }), []);
+  const cameraRef = useR({ x: 0, y: 0, k: 1 });
+  const viewContainerRef = useR(null);
+  const [viewSize, setViewSize] = useS({ w: 1000, h: 700 });
+
+  useE(() => {
+    if (!viewContainerRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setViewSize({ w: e.contentRect.width, h: e.contentRect.height });
+    });
+    ro.observe(viewContainerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useE(() => {
+    if (viewSize.w < 10) return;
+    fitTo(layoutData.state.map(s => s.id));
+  }, [viewSize.w]);
+
+  // Continuous physics simulation — never stops, so nodes breathe,
+  // drift apart when clustered, and respond to hover / drag.
+  useE(() => {
+    let raf, lastTick = 0;
+    function loop(now) {
+      layoutData.step();
+      if (now - lastTick > 22) { setTick(t => (t + 1) & 0xffff); lastTick = now; }
+      raf = requestAnimationFrame(loop);
+    }
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [layoutData]);
+
+  function fitTo(ids, pad = 140, duration = 500) {
+    const nodes = layoutData.state.filter(s => ids.includes(s.id));
+    if (!nodes.length) return;
+    let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+    nodes.forEach(s => {
+      if (s.x < minX) minX = s.x;
+      if (s.y < minY) minY = s.y;
+      if (s.x > maxX) maxX = s.x;
+      if (s.y > maxY) maxY = s.y;
+    });
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    const w = maxX - minX, h = maxY - minY;
+    const k = Math.min(viewSize.w / w, viewSize.h / h, 1.8);
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    const targetX = viewSize.w / 2 - cx * k;
+    const targetY = viewSize.h / 2 - cy * k;
+    animateCamera({ x: targetX, y: targetY, k }, duration);
+  }
+
+  const animRef = useR(null);
+  function animateCamera(to, duration) {
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+    const from = { ...cameraRef.current };
+    const t0 = performance.now();
+    function tick(now) {
+      const t = Math.min(1, (now - t0) / duration);
+      const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+      cameraRef.current = {
+        x: from.x + (to.x - from.x) * e,
+        y: from.y + (to.y - from.y) * e,
+        k: from.k + (to.k - from.k) * e,
+      };
+      setCamVer(v => v + 1);
+      if (t < 1) animRef.current = requestAnimationFrame(tick);
+    }
+    animRef.current = requestAnimationFrame(tick);
+  }
+  function bumpCam() { setCamVer(v => v + 1); }
+
+  function onTyping(text) {
+    if (!text.trim() || streaming) { setPreHighlight(new Set()); return; }
+    const low = text.toLowerCase();
+    const hits = new Set();
+    window.M3_DATA.nodes.forEach(n => {
+      const hay = (n.name + " " + n.overview + " " + n.cat).toLowerCase();
+      const tokens = low.split(/\s+/).filter(t => t.length > 3);
+      if (tokens.some(t => hay.includes(t))) hits.add(n.id);
+    });
+    setPreHighlight(hits);
+  }
+
+  function resetChat() {
+    cancelRef.current.cancelled = true;
+    setTurns([]); setHighlighted(new Set()); setTrail([]); setFlowEdges(new Set());
+    setCited([]); setPulseId(null); setPreHighlight(new Set());
+    setStreaming(false);
+    fitTo(layoutData.state.map(s => s.id));
+  }
+
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  // Stream a text chunk word-by-word into a specific part index.
+  async function streamIntoPart(turnUpdater) {
+    // helper for building
+  }
+
+  async function runScenario(id) {
+    const sc = window.M3_DATA.scenarios.find(s => s.id === id);
+    if (!sc || streaming) return;
+    cancelRef.current = { cancelled: false };
+    const cancel = cancelRef.current;
+
+    setTurns(t => [...t, { role: "user", text: sc.prompt }, { role: "assistant", parts: [] }]);
+    setStreaming(true);
+    setPreHighlight(new Set());
+    setCited([]);
+    setTrail([]);
+    setFlowEdges(new Set());
+
+    const initHL = new Set(sc.preHighlight);
+    setHighlighted(initHL);
+    fitTo(sc.preHighlight, 180, 700);
+    await sleep(650);
+    if (cancel.cancelled) return;
+
+    const citedOrder = [];
+    const citedSet = new Set();
+
+    for (let i = 0; i < sc.reply.length; i++) {
+      const part = sc.reply[i];
+
+      // Create a new part slot
+      const partIndex = await new Promise(resolve => {
+        setTurns(t => {
+          const out = t.slice();
+          const last = out[out.length - 1];
+          const parts = last.parts.slice();
+          const idx = parts.length;
+          parts.push({ text: "", cite: part.cite || null });
+          out[out.length - 1] = { ...last, parts };
+          queueMicrotask(() => resolve(idx));
+          return out;
+        });
+      });
+
+      // Stream words
+      const words = part.text.split(/(\s+)/);
+      for (const w of words) {
+        if (cancel.cancelled) return;
+        await sleep(18 + Math.random() * 16);
+        setTurns(t => {
+          const out = t.slice();
+          const last = out[out.length - 1];
+          const parts = last.parts.slice();
+          parts[partIndex] = { ...parts[partIndex], text: parts[partIndex].text + w };
+          out[out.length - 1] = { ...last, parts };
+          return out;
+        });
+      }
+
+      if (part.cite) {
+        if (cancel.cancelled) return;
+        const n = window.M3_DATA.nodes.find(nn => nn.id === part.cite);
+        if (!citedSet.has(part.cite)) {
+          citedSet.add(part.cite);
+          citedOrder.push({ id: n.id, name: n.name, cat: n.cat });
+          setCited([...citedOrder]);
+        }
+        setPulseId(part.cite);
+        setHighlighted(prev => new Set([...prev, part.cite]));
+        const prevCite = citedOrder.length >= 2 ? citedOrder[citedOrder.length - 2].id : null;
+        if (prevCite) {
+          const edgeKey = findEdgeKey(prevCite, part.cite);
+          if (edgeKey) {
+            setFlowEdges(prev => { const nx = new Set(prev); nx.add(edgeKey); return nx; });
+            setTimeout(() => setFlowEdges(prev => { const nx = new Set(prev); nx.delete(edgeKey); return nx; }), 1800);
+          }
+          setTrail(prev => [...prev, { from: prevCite, to: part.cite }]);
+        }
+        fitTo([...citedSet], 200, 600);
+        await sleep(420);
+        if (cancel.cancelled) return;
+        setPulseId(null);
+      }
+    }
+    setStreaming(false);
+    setHighlighted(new Set(citedOrder.map(c => c.id)));
+  }
+
+  function findEdgeKey(a, b) {
+    const l1 = window.M3_DATA.links.find(l => l.s===a && l.t===b);
+    if (l1) return `${a}→${b}`;
+    const l2 = window.M3_DATA.links.find(l => l.s===b && l.t===a);
+    if (l2) return `${b}→${a}`;
+    return null;
+  }
+
+  function onSend(text) {
+    const scores = window.M3_DATA.scenarios.map(s => {
+      let score = 0;
+      const hay = s.prompt.toLowerCase();
+      text.toLowerCase().split(/\s+/).forEach(t => {
+        if (t.length > 3 && hay.includes(t)) score++;
+      });
+      return { s, score };
+    }).sort((a,b) => b.score - a.score);
+    if (scores[0] && scores[0].score > 0) { runScenario(scores[0].s.id); return; }
+    runFallback(text);
+  }
+
+  async function runFallback(text) {
+    setTurns(t => [...t, { role: "user", text }, { role: "assistant", parts: [{ text: "Nothing in your wiki matches that yet. Try one of the suggested prompts to see M3 trace connections across your knowledge.", cite: null }] }]);
+    setStreaming(true);
+    await sleep(400);
+    setStreaming(false);
+  }
+
+  function focusNode(id) {
+    const n = layoutData.byId.get(id);
+    if (!n) return;
+    const k = Math.max(1.5, cameraRef.current.k);
+    const targetX = viewSize.w / 2 - n.x * k;
+    const targetY = viewSize.h / 2 - n.y * k;
+    animateCamera({ x: targetX, y: targetY, k }, 450);
+    setPulseId(id);
+    setTimeout(() => setPulseId(null), 1400);
+  }
+
+  function setZoom(newK) {
+    const k = Math.max(0.25, Math.min(3.5, newK));
+    const cam = cameraRef.current;
+    const cx = viewSize.w/2, cy = viewSize.h/2;
+    const worldX = (cx - cam.x) / cam.k;
+    const worldY = (cy - cam.y) / cam.k;
+    cameraRef.current = { k, x: cx - worldX * k, y: cy - worldY * k };
+    bumpCam();
+  }
+
+  const ChatRail = window.M3ChatRail;
+  const Canvas = window.M3Canvas;
+  const Toolbar = window.M3Toolbar;
+  const Legend = window.M3Legend;
+  const Minimap = window.M3Minimap;
+  const TimeSlider = window.M3TimeSlider;
+
+  return (
+    <div className="app" data-variant={variant}>
+      <ChatRail
+        onScenario={runScenario}
+        onSend={onSend}
+        onTyping={onTyping}
+        onReset={resetChat}
+        turns={turns}
+        streaming={streaming}
+        cited={cited}
+        onCitedClick={focusNode}
+      />
+      <main className="canvas-area" ref={viewContainerRef}>
+        <Canvas
+          variant={variant}
+          showHulls={tweaks.showHulls}
+          edgeCurve={tweaks.edgeCurve}
+          highlighted={highlighted}
+          trail={trail}
+          onNodeClick={focusNode}
+          hoverEdge={hoverEdge}
+          setHoverEdge={setHoverEdge}
+          pulseId={pulseId}
+          flowEdges={flowEdges}
+          preHighlight={preHighlight}
+          timeCutoff={timeCutoff}
+          layoutData={layoutData}
+          cameraRef={cameraRef}
+          cameraVersion={camVer}
+          onCamera={bumpCam}
+        />
+        <Toolbar
+          variant={variant} setVariant={setVariant}
+          onFit={() => fitTo(layoutData.state.map(s=>s.id))}
+          zoom={cameraRef.current.k} setZoom={setZoom}
+        />
+        <div className="bottom-right">
+          <Legend/>
+          <Minimap
+            layoutData={layoutData}
+            camera={cameraRef.current}
+            viewSize={viewSize}
+            highlighted={highlighted}
+          />
+        </div>
+        <div className="bottom-center">
+          <TimeSlider
+            value={timeCutoff}
+            onChange={setTimeCutoff}
+            min="2026-01-01" max="2026-04-18"
+          />
+        </div>
+      </main>
+
+      {tweaksOpen && (
+        <div className="tweaks">
+          <div className="tweaks__title">Tweaks</div>
+          <div className="tweaks__label">Canvas style</div>
+          <div className="tweaks__seg">
+            <button className={variant==="cosmos"?"on":""} onClick={() => setVariant("cosmos")}>Cosmos</button>
+            <button className={variant==="blueprint"?"on":""} onClick={() => setVariant("blueprint")}>Blueprint</button>
+          </div>
+          <div className="tweaks__label" style={{marginTop:14}}>Hover-repel</div>
+          <div className="tweaks__seg">
+            <button className={!tweaks.hoverRepel?"on":""} onClick={() => setTweak("hoverRepel", false)}>Off</button>
+            <button className={tweaks.hoverRepel?"on":""} onClick={() => setTweak("hoverRepel", true)}>On</button>
+          </div>
+          <div className="tweaks__label" style={{marginTop:14}}>Self orbit radius · {tweaks.selfOrbit}px</div>
+          <input type="range" min={160} max={420} step={10}
+            value={tweaks.selfOrbit}
+            onChange={(e) => setTweak("selfOrbit", +e.target.value)}
+            style={{width:"100%"}}
+          />
+          <div className="tweaks__label" style={{marginTop:14}}>Show category halos</div>
+          <div className="tweaks__seg">
+            <button className={!tweaks.showHulls?"on":""} onClick={() => setTweak("showHulls", false)}>Off</button>
+            <button className={tweaks.showHulls?"on":""} onClick={() => setTweak("showHulls", true)}>On</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.M3App = App;
+
+</script>
+<script type="text/babel">
+  function boot() {
+    if (!window.M3App) { requestAnimationFrame(boot); return; }
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    const App = window.M3App;
+    root.render(<App/>);
+  }
+  boot();
+</script>
+</body>
+</html>

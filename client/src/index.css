@@ -2,20 +2,507 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+/* M3 Canvas — dark workstation aesthetic, ported from the design reference at
+ * docs/design/M3-Canvas.html. The CSS variables below are the single source
+ * of truth; everything else is layout glue. */
+
+:root {
+  --m3-bg:        oklch(0.17 0.01 260);
+  --m3-surface:   oklch(0.21 0.012 260);
+  --m3-surface-2: oklch(0.24 0.012 260);
+  --m3-line:      oklch(0.32 0.012 260);
+  --m3-line-2:    oklch(0.40 0.014 260);
+  --m3-ink:       oklch(0.96 0.005 260);
+  --m3-muted:     oklch(0.66 0.01 260);
+  --m3-dim:       oklch(0.48 0.008 260);
+  --m3-accent:    oklch(0.78 0.14 220);
 }
 
-/* Markdown content styling */
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--m3-bg);
+  color: var(--m3-ink);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body { overflow: hidden; }
+
+.m3-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   App grid: chat rail | canvas
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  flex: 1;
+  min-height: 0;
+  background: var(--m3-bg);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Chat rail
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-chat-rail {
+  background: var(--m3-surface);
+  border-right: 1px solid var(--m3-line);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.m3-chat-rail__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--m3-line);
+}
+
+.m3-chat-rail__title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.m3-chat-rail__logo {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: var(--m3-ink);
+  color: var(--m3-bg);
+  font-weight: 700;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.m3-btn-ghost {
+  background: transparent;
+  border: 1px solid var(--m3-line);
+  color: var(--m3-muted);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.m3-btn-ghost:hover { color: var(--m3-ink); border-color: var(--m3-line-2); }
+
+.m3-chat-rail__scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.m3-chat-rail__empty-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+  margin-bottom: 10px;
+}
+
+.m3-chat-rail__prompts { display: flex; flex-direction: column; gap: 8px; }
+
+.m3-prompt-chip {
+  text-align: left;
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+}
+.m3-prompt-chip:hover {
+  background: oklch(0.26 0.014 260);
+  border-color: var(--m3-line-2);
+}
+
+.m3-turn { display: flex; flex-direction: column; gap: 4px; }
+.m3-turn__role {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+}
+.m3-turn--user .m3-turn__role { color: var(--m3-accent); }
+
+.m3-turn__body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--m3-ink);
+  white-space: pre-wrap;
+}
+.m3-turn--user .m3-turn__body { font-weight: 500; }
+.m3-turn--ai .m3-turn__body { color: oklch(0.86 0.008 260); }
+
+.m3-cite {
+  display: inline;
+  background: transparent;
+  border: none;
+  color: var(--m3-ink);
+  font: inherit;
+  padding: 0 1px;
+  cursor: pointer;
+  border-bottom: 1px dashed currentColor;
+  transition: background 120ms;
+}
+.m3-cite:hover { background: oklch(0.28 0.014 260); }
+
+.m3-chat-rail__streaming {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+}
+.m3-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--m3-muted);
+  animation: m3-blink 1.2s ease-in-out infinite;
+}
+.m3-dot:nth-child(2) { animation-delay: 0.15s; }
+.m3-dot:nth-child(3) { animation-delay: 0.30s; }
+
+@keyframes m3-blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40%           { opacity: 1; }
+}
+
+.m3-cited-panel {
+  border-top: 1px solid var(--m3-line);
+  padding: 12px 16px 10px;
+}
+.m3-cited-panel__title {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--m3-muted);
+  font-family: "JetBrains Mono", monospace;
+  margin-bottom: 8px;
+}
+.m3-cited-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.m3-cited-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.m3-cited-item:hover {
+  background: var(--m3-surface-2);
+  border-color: var(--m3-line);
+}
+.m3-cited-idx {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--m3-muted);
+}
+.m3-cited-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.m3-cited-name { color: oklch(0.9 0.008 260); }
+
+.m3-chat-rail__input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--m3-line);
+  background: var(--m3-surface);
+}
+.m3-chat-rail__input input {
+  flex: 1;
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 150ms;
+}
+.m3-chat-rail__input input:focus { border-color: var(--m3-accent); }
+.m3-chat-rail__input button {
+  background: var(--m3-ink);
+  color: var(--m3-bg);
+  border: none;
+  width: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.m3-chat-rail__input button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Canvas area + variant backgrounds
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-canvas-area {
+  position: relative;
+  background: var(--m3-bg);
+  overflow: hidden;
+}
+
+.m3-app[data-variant="cosmos"] .m3-canvas-area {
+  background:
+    radial-gradient(circle at 20% 30%, oklch(0.22 0.02 260) 0%, transparent 60%),
+    radial-gradient(circle at 80% 70%, oklch(0.20 0.02 220) 0%, transparent 60%),
+    var(--m3-bg);
+}
+.m3-app[data-variant="blueprint"] .m3-canvas-area {
+  background-image:
+    linear-gradient(to right,  oklch(0.22 0.01 260) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.22 0.01 260) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.m3-canvas-error {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 10;
+  background: oklch(0.32 0.10 18 / 0.85);
+  color: var(--m3-ink);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Toolbar (top-right)
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  gap: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  z-index: 10;
+}
+.m3-toolbar__seg,
+.m3-toolbar__zoom {
+  display: flex;
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.m3-toolbar button {
+  background: transparent;
+  border: none;
+  color: var(--m3-muted);
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.m3-toolbar button:hover { color: var(--m3-ink); }
+.m3-toolbar button.on {
+  background: var(--m3-surface-2);
+  color: var(--m3-ink);
+}
+.m3-toolbar__zoom button { padding: 6px 10px; }
+.m3-toolbar__zoom span {
+  padding: 6px 8px;
+  color: var(--m3-ink);
+}
+
+.m3-toolbar__gear {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-muted);
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  position: relative;
+  padding: 0;
+}
+.m3-toolbar__gear:hover { color: var(--m3-ink); }
+.m3-toolbar__gear-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: oklch(0.78 0.16 60);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Bottom-right stack (legend)
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-bottom-right {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+  z-index: 10;
+}
+
+.m3-legend {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  color: var(--m3-muted);
+}
+.m3-legend__title {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+.m3-legend__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--m3-ink);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Animations
+   ──────────────────────────────────────────────────────────────────────── */
+
+@keyframes m3-pulse {
+  0%   { transform: scale(1); opacity: 1; }
+  100% { transform: scale(3); opacity: 0; }
+}
+@keyframes m3-flow {
+  0%   { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -26; }
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Settings modal
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: oklch(0.10 0.01 260 / 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 50;
+  display: grid;
+  place-items: center;
+}
+.m3-modal {
+  position: relative;
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 8px;
+  width: min(720px, 92vw);
+  max-height: min(86vh, 800px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.m3-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: 1px solid var(--m3-line);
+  color: var(--m3-muted);
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+.m3-modal__close:hover { color: var(--m3-ink); }
+.m3-modal__body {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 0;
+}
+
+/* Nicer scrollbars */
+.m3-chat-rail__scroll::-webkit-scrollbar,
+.m3-modal__body::-webkit-scrollbar { width: 6px; }
+.m3-chat-rail__scroll::-webkit-scrollbar-thumb,
+.m3-modal__body::-webkit-scrollbar-thumb {
+  background: var(--m3-line);
+  border-radius: 3px;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Tailwind shim — Settings still uses bg-m3-* / text-m3-* classes.
+   ──────────────────────────────────────────────────────────────────────── */
+
 .prose h1 { @apply text-2xl font-bold mb-4 mt-6; }
 .prose h2 { @apply text-xl font-semibold mb-3 mt-5; }
 .prose h3 { @apply text-lg font-semibold mb-2 mt-4; }
-.prose p { @apply mb-3 leading-relaxed; }
+.prose p  { @apply mb-3 leading-relaxed; }
 .prose ul { @apply list-disc pl-6 mb-3; }
 .prose ol { @apply list-decimal pl-6 mb-3; }
 .prose li { @apply mb-1; }
-.prose code { @apply bg-m3-surface px-1.5 py-0.5 rounded text-sm; }
-.prose pre { @apply bg-m3-surface p-4 rounded-lg overflow-x-auto mb-3; }
-.prose a { @apply text-m3-accent hover:text-m3-accent-hover underline; }
+.prose code  { @apply bg-m3-surface px-1.5 py-0.5 rounded text-sm; }
+.prose pre   { @apply bg-m3-surface p-4 rounded-lg overflow-x-auto mb-3; }
+.prose a     { @apply text-m3-accent hover:text-m3-accent-hover underline; }
 .prose blockquote { @apply border-l-4 border-m3-border pl-4 italic text-m3-muted; }
