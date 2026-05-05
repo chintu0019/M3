@@ -49,3 +49,4 @@ docs/superpowers/
 # git worktrees
 .worktrees/
 
+/server/m3/_client_dist/

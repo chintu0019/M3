@@ -51,6 +51,15 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["m3*"]
 
+# Bundle the React SPA inside the wheel. scripts/build-wheel.sh copies
+# client/dist into m3/_client_dist/ before invoking pip wheel; without
+# include-package-data + this glob, setuptools wouldn't ship the assets.
+[tool.setuptools.package-data]
+m3 = ["_client_dist/**/*"]
+
+[tool.setuptools]
+include-package-data = true
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

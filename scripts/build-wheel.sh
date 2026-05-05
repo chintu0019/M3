@@ -7,6 +7,12 @@
 # The Tauri shell looks for `m3-*.whl` in its resource directory at launch
 # and reconciles a private venv against it. Stale wheels are wiped first so
 # we never bundle two versions side-by-side.
+#
+# We also copy client/dist into server/m3/_client_dist/ before the wheel is
+# built so that the SPA assets ship inside the wheel — m3.app finds them via
+# `Path(__file__).parent / "_client_dist"` at runtime. Without this, an
+# installed (non-editable) m3 has no static files to serve and `/` returns
+# `{"detail":"Not Found"}`.
 
 set -euo pipefail
 
@@ -26,6 +32,21 @@ mkdir -p "$RESOURCES"
 step "Clearing stale wheels in $RESOURCES"
 rm -f "$RESOURCES"/*.whl
 
+DIST_SRC="$ROOT/client/dist"
+DIST_DST="$ROOT/server/m3/_client_dist"
+
+[[ -f "$DIST_SRC/index.html" ]] || die "client/dist/index.html missing — run \`cd client && npm run build\` first"
+
+step "Vendoring client/dist into the package as m3/_client_dist"
+rm -rf "$DIST_DST"
+cp -R "$DIST_SRC" "$DIST_DST"
+ok "Vendored $(find "$DIST_DST" -type f | wc -l | tr -d ' ') files"
+
+# Make sure the vendored copy is wiped after the wheel build, otherwise
+# editable/dev installs would shadow the source-tree client/dist.
+cleanup() { rm -rf "$DIST_DST"; }
+trap cleanup EXIT
+
 step "Building m3 wheel"
 # `pip wheel --no-deps` is the smallest tool that gets us a PEP 517 wheel from
 # server/pyproject.toml without pulling in the whole `build` package. Deps
@@ -34,4 +55,12 @@ step "Building m3 wheel"
 
 WHEEL="$(find "$RESOURCES" -maxdepth 1 -name 'm3-*.whl' -print -quit)"
 [[ -n "$WHEEL" ]] || die "wheel build produced no m3-*.whl in $RESOURCES"
-ok "Built $(basename "$WHEEL")"
+
+# Sanity-check that the SPA actually made it into the wheel. We avoid
+# `grep -q` here — it would close the pipe early, SIGPIPE unzip, and (with
+# pipefail) make the whole pipeline look failed.
+if [[ "$(unzip -l "$WHEEL" 2>/dev/null | grep -c 'm3/_client_dist/index\.html')" -eq 0 ]]; then
+  die "wheel built but m3/_client_dist/index.html is missing — check pyproject package data"
+fi
+
+ok "Built $(basename "$WHEEL") ($(du -h "$WHEEL" | awk '{print $1}'))"

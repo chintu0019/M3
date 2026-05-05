@@ -63,10 +63,20 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     async def status():
         return {"ok": True, "brain_root": str(brain_root)}
 
-    # Serve the built React client (if the bundle exists). This lets `m3 start`
-    # open the browser to a working SPA without any separate build step at run time.
-    _client_dist = Path(__file__).resolve().parent.parent.parent / "client" / "dist"
-    if _client_dist.exists():
+    # Serve the built React client. We look in two places, in order:
+    #   1. <m3 package>/_client_dist/ — copied here by scripts/build-wheel.sh
+    #      before the wheel is built. This is what release/.app installs use.
+    #   2. <repo>/client/dist/ — the dev-source tree layout, for editable
+    #      installs (`pip install -e ./server`) where __file__ resolves into
+    #      the source checkout.
+    _here = Path(__file__).resolve().parent
+    for candidate in (_here / "_client_dist", _here.parent.parent / "client" / "dist"):
+        if candidate.exists():
+            _client_dist = candidate
+            break
+    else:
+        _client_dist = None
+    if _client_dist is not None:
         app.mount("/assets", StaticFiles(directory=_client_dist / "assets"), name="assets")
 
         @app.get("/", include_in_schema=False)
