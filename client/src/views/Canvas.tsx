@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type ClusterResponse, type LLMSettings } from "../api/client";
+import { ChatHistorySidebar } from "../components/canvas/ChatHistorySidebar";
 import { ChatRail, type CitedRef } from "../components/canvas/ChatRail";
 import { FilesModal } from "../components/canvas/files/FilesModal";
 import { Graph, type GraphLink } from "../components/canvas/Graph";
@@ -81,6 +82,19 @@ export default function Canvas() {
     if (activeSessionId) localStorage.setItem("m3-session-id", activeSessionId);
     else localStorage.removeItem("m3-session-id");
   }, [activeSessionId]);
+
+  // Sidebar collapse state.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("m3-sidebar-collapsed") === "1";
+  });
+  useEffect(() => {
+    localStorage.setItem("m3-sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+  }, [sidebarCollapsed]);
+
+  // Bumped after a chat round-trip so the sidebar refetches titles + timestamps
+  // (the auto-title pass writes async on the server, so we delay slightly).
+  const [chatsRefreshKey, setChatsRefreshKey] = useState(0);
 
   const cameraRef = useRef({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -334,6 +348,10 @@ export default function Canvas() {
     setFlowEdges(new Set());
     setPulseId(null);
     lastCitedRef.current = null;
+    // After the round-trip the agent will have minted/updated a session and
+    // the auto-title task fires async server-side. Wait briefly so the title
+    // and updated_at land before the sidebar refetches.
+    window.setTimeout(() => setChatsRefreshKey(k => k + 1), 1500);
   }, []);
 
   const presentLinkKinds: LinkKind[] = useMemo(() => {
@@ -344,6 +362,14 @@ export default function Canvas() {
 
   return (
     <div className="m3-app" data-variant={variant}>
+      <ChatHistorySidebar
+        activeSessionId={activeSessionId}
+        onSelectSession={(sid) => setActiveSessionId(sid)}
+        onNewChat={() => setActiveSessionId(null)}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
+        refreshKey={chatsRefreshKey}
+      />
       <ChatRail
         onTyping={onTyping}
         onSend={onSend}
