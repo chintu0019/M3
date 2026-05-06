@@ -25,6 +25,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status} ${res.statusText}: ${body.slice(0, 300)}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -141,8 +142,19 @@ export interface ItemListQuery {
 export interface ChatSessionSummary {
   id: string;
   title: string;
+  title_locked: boolean;
   message_count: number;
   last_ts: string;
+  pinned: boolean;
+  folder_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatFolder {
+  id: string;
+  name: string;
+  sort_order: number;
 }
 
 export interface ChatSessionTurn {
@@ -366,4 +378,36 @@ export const api = {
     request<{ id: string; turns: ChatSessionTurn[] }>(
       `/api/v1/chats/${encodeURIComponent(sid)}`,
     ),
+
+  patchChat: (
+    sid: string,
+    fields: { title?: string; pinned?: boolean; folder_id?: string | null },
+  ) =>
+    request<ChatSessionSummary>(`/api/v1/chats/${encodeURIComponent(sid)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    }),
+
+  deleteChat: (sid: string) =>
+    request<void>(`/api/v1/chats/${encodeURIComponent(sid)}`, { method: "DELETE" }),
+
+  listFolders: () => request<ChatFolder[]>("/api/v1/folders"),
+
+  createFolder: (name: string) =>
+    request<ChatFolder>("/api/v1/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+
+  patchFolder: (fid: string, fields: { name?: string; sort_order?: number }) =>
+    request<ChatFolder>(`/api/v1/folders/${encodeURIComponent(fid)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    }),
+
+  deleteFolder: (fid: string) =>
+    request<void>(`/api/v1/folders/${encodeURIComponent(fid)}`, { method: "DELETE" }),
 };
