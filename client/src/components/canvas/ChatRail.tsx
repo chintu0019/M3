@@ -87,8 +87,9 @@ export function ChatRail({
         setTurns(restored);
       })
       .catch(() => {
+        if (cancelled) return;
         // Server doesn't have this session anymore (file deleted, fresh
-        // brain, etc) — tell the parent so it can drop the stale id.
+        // brain, etc), tell the parent so it can drop the stale id.
         onSessionChange(null);
       });
     return () => { cancelled = true; };
