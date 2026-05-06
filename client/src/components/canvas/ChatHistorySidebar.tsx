@@ -41,13 +41,10 @@ export function ChatHistorySidebar({
   const [folderDraft, setFolderDraft] = useState("");
 
   const refetch = useCallback(async () => {
-    try {
-      const [c, f] = await Promise.all([api.listChats(), api.listFolders()]);
-      setChats(c);
-      setFolders(f);
-    } catch {
-      // Empty/error: keep last successful snapshot.
-    }
+    // Fetch independently: an older backend without /folders shouldn't
+    // suppress the chat list. Each branch keeps its last good snapshot.
+    api.listChats().then(setChats).catch(() => {});
+    api.listFolders().then(setFolders).catch(() => {});
   }, []);
 
   useEffect(() => { refetch(); }, [refetch, refreshKey]);
