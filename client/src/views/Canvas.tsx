@@ -68,6 +68,20 @@ export default function Canvas() {
   const [cited, setCited] = useState<CitedRef[]>([]);
   const [camVer, setCamVer] = useState(0);
 
+  // Active chat session id. Lifted out of ChatRail so the (forthcoming) chat
+  // history sidebar can switch the rail to a different conversation by
+  // updating this state. Persisted to localStorage so chats survive relaunch;
+  // ChatRail rehydrates whenever this changes (including null = clear turns).
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : localStorage.getItem("m3-session-id"),
+  );
+
+  // Persist whenever it changes, single source of truth.
+  useEffect(() => {
+    if (activeSessionId) localStorage.setItem("m3-session-id", activeSessionId);
+    else localStorage.removeItem("m3-session-id");
+  }, [activeSessionId]);
+
   const cameraRef = useRef({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number | null>(null);
@@ -339,6 +353,8 @@ export default function Canvas() {
         onCitedClick={focusNode}
         onReset={onReset}
         suggestions={SUGGESTIONS}
+        sessionId={activeSessionId}
+        onSessionChange={setActiveSessionId}
       />
       <main className="m3-canvas-area" ref={containerRef}>
         {clusterErr && (

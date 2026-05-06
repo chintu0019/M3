@@ -42,24 +42,20 @@ export interface ChatRailProps {
   onReset: () => void;
   /** Suggested prompts shown when there are no turns yet. */
   suggestions: string[];
+  /** Currently active session id. Null = no session yet (mint on first send). */
+  sessionId: string | null;
+  /** Notify parent of session id changes (mint on first send, reset on "+"). */
+  onSessionChange: (sid: string | null) => void;
 }
 
 export function ChatRail({
   onTyping, onSend, onCitation, resolveCitation, cited, onCitedClick, onReset,
-  suggestions,
+  suggestions, sessionId, onSessionChange,
 }: ChatRailProps) {
   const [turns, setTurns] = useState<RailTurn[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [currentStep, setCurrentStep] = useState<string | null>(null);
-  // The current conversation's id. Persisted to localStorage so chats survive
-  // app relaunches; populated lazily on first send when null. The server
-  // appends each turn to ~/brain/chats/<sessionId>.json on a request that
-  // includes session_id, so wiring this through is the whole "make chats
-  // persist" feature.
-  const [sessionId, setSessionId] = useState<string | null>(() =>
-    typeof window === "undefined" ? null : localStorage.getItem("m3-session-id"),
-  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef({ cancelled: false });
 
@@ -69,13 +65,16 @@ export function ChatRail({
 
   useEffect(() => { onTyping(input); }, [input, onTyping]);
 
-  // Hydrate from a persisted session on mount. Each previous turn's text +
-  // role gets converted into a RailTurn so the rail looks like the user left
+  // Hydrate whenever the active session id changes. Each previous turn's text
+  // + role gets converted into a RailTurn so the rail looks like the user left
   // it. Citations from prior turns aren't reconstructed (the SSE event log is
   // saved server-side but parsing it back into per-turn cite offsets isn't
   // worth the complexity) — they re-appear if the user re-asks.
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      setTurns([]);
+      return;
+    }
     let cancelled = false;
     api.getChat(sessionId)
       .then(res => {
@@ -85,25 +84,20 @@ export function ChatRail({
           text: t.content,
           cites: [],
         }));
-        if (restored.length > 0) setTurns(restored);
+        setTurns(restored);
       })
       .catch(() => {
         // Server doesn't have this session anymore (file deleted, fresh
-        // brain, etc) — drop the stale id and start clean on next send.
-        localStorage.removeItem("m3-session-id");
-        setSessionId(null);
+        // brain, etc) — tell the parent so it can drop the stale id.
+        onSessionChange(null);
       });
     return () => { cancelled = true; };
-    // Run only on the initial mount-time session id. Reset path flips this
-    // explicitly via setSessionId(null) and we don't want to re-fetch then.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionId, onSessionChange]);
 
   async function ensureSessionId(): Promise<string> {
     if (sessionId) return sessionId;
     const { id } = await api.newChat();
-    localStorage.setItem("m3-session-id", id);
-    setSessionId(id);
+    onSessionChange(id);
     return id;
   }
 
@@ -112,17 +106,7 @@ export function ChatRail({
     setTurns([]);
     setStreaming(false);
     setCurrentStep(null);
-    // Mint a fresh session for the next conversation rather than reusing
-    // the current one. Failing here is non-fatal — the next send will retry
-    // via ensureSessionId.
-    try {
-      const { id } = await api.newChat();
-      localStorage.setItem("m3-session-id", id);
-      setSessionId(id);
-    } catch {
-      localStorage.removeItem("m3-session-id");
-      setSessionId(null);
-    }
+    onSessionChange(null); // parent will mint a fresh session lazily on next send
     onReset();
   }
 
