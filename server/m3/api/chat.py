@@ -88,6 +88,18 @@ def build_chat_router(*, brain_root: Path, embedder: _Embedder, llm_factory: Cal
                         brain_root, body.session_id, "assistant",
                         assistant_content, events=collected_events,
                     )
+                    # Auto-title on the first exchange of a session.
+                    # We re-load the session here rather than tracking turn
+                    # count separately: load_session is cheap on a 2-turn file.
+                    turns = _chats.load_session(brain_root, body.session_id)
+                    user_turns = sum(1 for t in turns if t["role"] == "user")
+                    if user_turns == 1:
+                        # Fire-and-forget; never block [DONE].
+                        import asyncio
+                        from m3.brain.auto_title import generate_and_save_title
+                        asyncio.create_task(
+                            generate_and_save_title(brain_root, body.session_id, llm)
+                        )
                 except OSError:
                     # Persistence failure must not break the chat stream.
                     pass

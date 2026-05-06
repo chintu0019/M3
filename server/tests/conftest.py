@@ -51,9 +51,22 @@ class FakeLLM:
     def __init__(self, canned: dict[str, dict[str, Any]] | None = None) -> None:
         self._canned = canned or {}
         self.calls: list[dict[str, Any]] = []
+        self._completion = "Default title"
 
     def set_response(self, key: str, response: dict[str, Any]) -> None:
         self._canned[key] = response
+
+    def set_completion_response(self, text: str) -> None:
+        self._completion = text
+
+    async def complete(
+        self,
+        messages,
+        system=None,
+        max_tokens=4096,
+        temperature=0.7,
+    ) -> str:
+        return self._completion
 
     async def complete_tool(
         self,
