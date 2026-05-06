@@ -28,6 +28,9 @@ dependencies = [
     "openpyxl>=3.1",
     "python-pptx>=1.0",
     "ebooklib>=0.18",
+    # Image + PDF thumbnails for the Files browser
+    "pillow>=10.4",
+    "pypdfium2>=4.30",
     # Config parsing
     "pydantic-settings>=2.6",
 ]

@@ -24,6 +24,7 @@ class ItemMeta:
     hooks: dict[str, Any]
     llm_output_raw: dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0
+    archived: bool = False
 
 
 def write_item(root: Path, item_id: uuid.UUID, *, extension: str, content: bytes) -> Path:
@@ -49,4 +50,22 @@ def read_meta(root: Path, item_id: uuid.UUID) -> ItemMeta | None:
         return None
     data = json.loads(target.read_text())
     data["id"] = uuid.UUID(data["id"])
-    return ItemMeta(**data)
+    # Tolerate older meta JSONs that predate fields like `archived` — let
+    # dataclass defaults fill them in instead of crashing the loader.
+    known = {f for f in ItemMeta.__dataclass_fields__}
+    return ItemMeta(**{k: v for k, v in data.items() if k in known})
+
+
+def iter_metas(root: Path):
+    """Yield every persisted ItemMeta in arbitrary order. Used by listing/index callers."""
+    p = BrainPaths(root)
+    if not p.items_meta.exists():
+        return
+    for path in p.items_meta.glob("*.json"):
+        try:
+            uid = uuid.UUID(path.stem)
+        except ValueError:
+            continue
+        meta = read_meta(root, uid)
+        if meta is not None:
+            yield meta

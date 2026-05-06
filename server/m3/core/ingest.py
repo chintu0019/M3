@@ -214,7 +214,16 @@ class Ingester:
             # the originally-written bytes — so keep the write inside the try.
             if inp.original_bytes is not None:
                 ext = (inp.original_filename or "bin").rsplit(".", 1)[-1] or "bin"
-                items_mod.write_item(self.brain_root, inp.item_id, extension=ext, content=inp.original_bytes)
+                original_path = items_mod.write_item(
+                    self.brain_root, inp.item_id, extension=ext, content=inp.original_bytes,
+                )
+                # Generate a list-view thumbnail. Best-effort: failures don't
+                # block the ingest — we just fall back to the kind icon in UI.
+                from m3.brain.thumbnails import generate_thumbnail
+                generate_thumbnail(
+                    self.brain_root, inp.item_id,
+                    original_path=original_path, content_kind=inp.content_type,
+                )
 
             candidates_block = await self._candidate_entities_prompt_block(inp.text)
             self_doc_text = (self.brain_root / "self.md").read_text()

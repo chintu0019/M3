@@ -80,6 +80,62 @@ export interface ItemMeta {
   when_source: string;
   hooks: Record<string, unknown>;
   confidence: number;
+  archived?: boolean;
+}
+
+export interface ItemListEntry {
+  id: string;
+  kind: string;
+  content_kind: string;
+  source: string;
+  original_filename: string | null;
+  created_at: string;
+  when_iso: string | null;
+  confidence: number;
+  snippet: string;
+  entity_count: number;
+  has_original: boolean;
+  has_thumbnail: boolean;
+  extension: string | null;
+  archived: boolean;
+}
+
+export interface ItemListPage {
+  items: ItemListEntry[];
+  next_cursor: string | null;
+  total: number;
+}
+
+export interface ProvenanceEntity {
+  slug: string;
+  canonical_name: string;
+  entity_type: string | null;
+  role: string;
+}
+
+export interface ProvenanceFact {
+  text: string;
+  source: string;
+}
+
+export interface ProvenanceResponse {
+  item_id: string;
+  entities_touched: ProvenanceEntity[];
+  facts: ProvenanceFact[];
+  questions: string[];
+  signal: Record<string, unknown> | null;
+  record: Record<string, unknown> | null;
+}
+
+export interface ItemListQuery {
+  kind?: string[];
+  content_kind?: string[];
+  q?: string;
+  since_iso?: string;
+  until_iso?: string;
+  cursor?: string;
+  limit?: number;
+  include_archived?: boolean;
 }
 
 export interface ChatSessionSummary {
@@ -148,11 +204,29 @@ export interface LocalAgentInfo {
 
 // --- methods ---
 
-async function* chatStream(message: string, history?: unknown[], session_id?: string) {
+interface ChatStreamOptions {
+  history?: unknown[];
+  session_id?: string;
+  scope_item_id?: string;
+}
+
+async function* chatStream(message: string, optsOrHistory?: ChatStreamOptions | unknown[], session_id?: string) {
+  // Backwards-compatible: callers used to pass (message, history, session_id).
+  // New callers can pass an options bag for scope_item_id support.
+  let history: unknown[] | undefined;
+  let sid: string | undefined = session_id;
+  let scope_item_id: string | undefined;
+  if (Array.isArray(optsOrHistory)) {
+    history = optsOrHistory;
+  } else if (optsOrHistory && typeof optsOrHistory === "object") {
+    history = optsOrHistory.history;
+    sid = optsOrHistory.session_id ?? sid;
+    scope_item_id = optsOrHistory.scope_item_id;
+  }
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ message, history, session_id }),
+    body: JSON.stringify({ message, history, session_id: sid, scope_item_id }),
   });
   if (!res.ok || !res.body) throw new Error(`chat ${res.status}`);
   const reader = res.body.getReader();
@@ -227,6 +301,39 @@ export const api = {
   item: (id: string) => request<ItemMeta>(`/api/v1/items/${id}`),
 
   itemOriginalUrl: (id: string) => `${BASE}/api/v1/items/${id}/original`,
+
+  itemThumbnailUrl: (id: string) => `${BASE}/api/v1/items/${id}/thumbnail`,
+
+  listItems: (params: ItemListQuery = {}) => {
+    const sp = new URLSearchParams();
+    for (const k of params.kind || []) sp.append("kind", k);
+    for (const ck of params.content_kind || []) sp.append("content_kind", ck);
+    if (params.q) sp.set("q", params.q);
+    if (params.since_iso) sp.set("since_iso", params.since_iso);
+    if (params.until_iso) sp.set("until_iso", params.until_iso);
+    if (params.cursor) sp.set("cursor", params.cursor);
+    if (params.limit != null) sp.set("limit", String(params.limit));
+    if (params.include_archived) sp.set("include_archived", "true");
+    const qs = sp.toString();
+    return request<ItemListPage>(`/api/v1/items${qs ? `?${qs}` : ""}`);
+  },
+
+  itemText: (id: string, max_chars = 20000) =>
+    request<{ extracted_text: string; truncated: boolean }>(
+      `/api/v1/items/${id}/text?max_chars=${max_chars}`,
+    ),
+
+  itemProvenance: (id: string) =>
+    request<ProvenanceResponse>(`/api/v1/items/${id}/provenance`),
+
+  archiveItem: (id: string, archived: boolean) =>
+    request<{ ok: boolean; archived: boolean }>(`/api/v1/items/${id}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ archived }),
+    }),
+
+  reingestItem: (id: string) =>
+    request<IngestResponse>(`/api/v1/items/${id}/reingest`, { method: "POST" }),
 
   settings: () => request<LLMSettings>("/api/v1/settings"),
 

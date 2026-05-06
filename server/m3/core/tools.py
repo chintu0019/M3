@@ -8,6 +8,7 @@ invokes the matching method when the LLM emits a tool call.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -22,10 +23,28 @@ class _Embedder(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
+@dataclass
+class _SyntheticHit:
+    """Stand-in shaped like core.retrieve.Hit so search_brain can return it without
+    forcing an import of the retrieve module's dataclass. Used for the scoped-chat
+    fallback when the retriever didn't surface the pinned item itself."""
+    item_id: str
+    score: float
+    kind: str
+    when_iso: str | None
+    snippet: str
+    excerpt: str
+    reasons: tuple[str, ...]
+
+
 class BrainTools:
-    def __init__(self, *, brain_root: Path, embedder: _Embedder) -> None:
+    def __init__(
+        self, *, brain_root: Path, embedder: _Embedder,
+        scope_item_id: str | None = None,
+    ) -> None:
         self.brain_root = brain_root
         self.embedder = embedder
+        self.scope_item_id = scope_item_id
         self._retriever = Retriever(brain_root=brain_root, embedder=embedder)
 
     # --- tool methods ---
@@ -33,6 +52,23 @@ class BrainTools:
     async def search_brain(self, *, query: str, k: int = 10,
                            since_iso: str | None = None, until_iso: str | None = None) -> list[dict[str, Any]]:
         hits = await self._retriever.search(query, k=k, since_iso=since_iso, until_iso=until_iso)
+        if self.scope_item_id:
+            # Hard-filter: when chat is scoped to a single uploaded file, the
+            # agent should only see hits from that file. If the retriever
+            # didn't surface the scoped item (e.g. the user asked something
+            # that doesn't textually match), synthesize one hit from the
+            # item's meta so the agent always has it to work with.
+            filtered = [h for h in hits if h.item_id == self.scope_item_id]
+            if not filtered:
+                meta = read_meta(self.brain_root, uuid.UUID(self.scope_item_id))
+                if meta is not None:
+                    excerpt = (meta.extracted_text or "")[:400]
+                    filtered = [_SyntheticHit(
+                        item_id=str(meta.id), score=0.5, kind=meta.kind,
+                        when_iso=meta.when_iso, snippet=excerpt[:160],
+                        excerpt=excerpt, reasons=("scoped_pin",),
+                    )]
+            hits = filtered
         return [{
             "item_id": h.item_id, "score": h.score, "kind": h.kind,
             "when_iso": h.when_iso, "snippet": h.snippet, "excerpt": h.excerpt,
@@ -69,6 +105,38 @@ class BrainTools:
 
     async def list_open_questions(self) -> list[str]:
         return list_unresolved(self.brain_root)
+
+    # --- prompt augmentation ---
+
+    def pinned_context_block(self, *, max_chars: int = 4000) -> str | None:
+        """When chat is scoped to one item, return a system-prompt block that
+        carries that item's text inline. The agent loop appends this to the
+        base system prompt so the LLM can answer without a tool round even if
+        retrieval misses the file."""
+        if not self.scope_item_id:
+            return None
+        try:
+            uid = uuid.UUID(self.scope_item_id)
+        except ValueError:
+            return None
+        meta = read_meta(self.brain_root, uid)
+        if meta is None:
+            return None
+        text = (meta.extracted_text or "").strip()
+        truncated = len(text) > max_chars
+        if truncated:
+            text = text[:max_chars] + "…"
+        filename = meta.original_filename or "(no filename)"
+        return (
+            "PINNED FILE CONTEXT\n"
+            f"item_id: {meta.id}\n"
+            f"filename: {filename}\n"
+            "When the user asks a question, prefer this file's content. "
+            f"Cite it as [^{meta.id}] whenever you use it.\n\n"
+            "--- begin file ---\n"
+            f"{text}\n"
+            "--- end file ---"
+        )
 
     # --- metadata for the LLM's tool schema ---
 
