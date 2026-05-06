@@ -154,3 +154,14 @@ def test_delete_session_meta_only(tmp_brain: Path):
     (chats_dir / "orphan.meta.json").write_text("{}")
     _chats.delete_session(tmp_brain, "orphan")
     assert not (chats_dir / "orphan.meta.json").exists()
+
+
+def test_read_meta_tolerates_non_dict_sidecar(tmp_brain: Path):
+    """Corrupt sidecar containing valid JSON that isn't a dict shouldn't crash."""
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hi")
+    meta_path = tmp_brain / "chats" / f"{sid}.meta.json"
+    meta_path.write_text("[]")  # valid JSON, wrong shape
+    meta = _chats.read_meta(tmp_brain, sid)
+    assert meta["title"] == "hi"  # falls back to derived
+    assert meta["pinned"] is False

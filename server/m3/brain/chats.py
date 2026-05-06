@@ -111,9 +111,12 @@ def read_meta(root: Path, sid: str) -> dict[str, Any]:
             persisted = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             persisted = {}
+    if not isinstance(persisted, dict):
+        persisted = {}
 
     jsonl = _session_path(root, sid)
-    turns = load_session(root, sid)
+    persisted_title = persisted.get("title")
+    turns = load_session(root, sid) if not persisted_title else []
     if jsonl.exists():
         mtime_iso = datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat()
         ctime_iso = datetime.fromtimestamp(jsonl.stat().st_ctime, tz=timezone.utc).isoformat()
@@ -122,7 +125,7 @@ def read_meta(root: Path, sid: str) -> dict[str, Any]:
 
     return {
         "id": sid,
-        "title": persisted.get("title") or _derive_title(turns),
+        "title": persisted_title or _derive_title(turns),
         "title_locked": bool(persisted.get("title_locked", False)),
         "pinned": bool(persisted.get("pinned", False)),
         "folder_id": persisted.get("folder_id"),
