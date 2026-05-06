@@ -8,9 +8,12 @@ session, so an interrupted chat is recoverable.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import uuid
 from datetime import date as _date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 def _dir(root: Path) -> Path:
@@ -21,6 +24,39 @@ def _dir(root: Path) -> Path:
 
 def _session_path(root: Path, sid: str) -> Path:
     return _dir(root) / f"{sid}.jsonl"
+
+
+def _meta_path(root: Path, sid: str) -> Path:
+    return _dir(root) / f"{sid}.meta.json"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON via tempfile + os.replace so a crash never leaves a half-file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _derive_title(turns: list[dict]) -> str:
+    """Mirrors the original list_sessions title behavior — first user message,
+    truncated to 60 chars. Used as the fallback when no meta sidecar exists."""
+    for t in turns:
+        if t.get("role") == "user":
+            return (t.get("content") or "")[:60]
+    return "(empty)"
 
 
 def new_session(root: Path) -> str:
@@ -61,6 +97,69 @@ def load_session(root: Path, sid: str) -> list[dict]:
                 # writes on unclean shutdown shouldn't brick a session.
                 continue
     return out
+
+
+def read_meta(root: Path, sid: str) -> dict[str, Any]:
+    """Return persisted metadata for a session, falling back to derived defaults
+    when the sidecar is missing. Sessions without a sidecar (e.g. ones created
+    before this feature shipped) appear in the listing with sensible defaults
+    so nothing requires a migration step."""
+    path = _meta_path(root, sid)
+    persisted: dict[str, Any] = {}
+    if path.exists():
+        try:
+            persisted = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            persisted = {}
+
+    jsonl = _session_path(root, sid)
+    turns = load_session(root, sid)
+    if jsonl.exists():
+        mtime_iso = datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat()
+        ctime_iso = datetime.fromtimestamp(jsonl.stat().st_ctime, tz=timezone.utc).isoformat()
+    else:
+        mtime_iso = ctime_iso = _now_iso()
+
+    return {
+        "id": sid,
+        "title": persisted.get("title") or _derive_title(turns),
+        "title_locked": bool(persisted.get("title_locked", False)),
+        "pinned": bool(persisted.get("pinned", False)),
+        "folder_id": persisted.get("folder_id"),
+        "created_at": persisted.get("created_at") or ctime_iso,
+        "updated_at": persisted.get("updated_at") or mtime_iso,
+    }
+
+
+def write_meta(root: Path, sid: str, **fields: Any) -> dict[str, Any]:
+    """Update metadata fields and persist. Setting `title` implicitly sets
+    `title_locked=True` unless caller passes title_locked explicitly. Fields
+    not supplied are preserved from the prior meta."""
+    current = read_meta(root, sid)
+
+    # Title implicitly locks unless caller is explicit (e.g. the auto-titler).
+    if "title" in fields and "title_locked" not in fields:
+        fields["title_locked"] = True
+
+    allowed = {"title", "title_locked", "pinned", "folder_id", "created_at"}
+    for key, value in fields.items():
+        if key in allowed:
+            current[key] = value
+
+    current["id"] = sid
+    current["updated_at"] = _now_iso()
+    _atomic_write_json(_meta_path(root, sid), current)
+    return current
+
+
+def delete_session(root: Path, sid: str) -> None:
+    """Remove both the .jsonl and .meta.json files. Idempotent — missing files
+    are silently ignored so the API delete handler can be a single call."""
+    for p in (_session_path(root, sid), _meta_path(root, sid)):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def list_sessions(root: Path, *, limit: int = 20) -> list[dict]:

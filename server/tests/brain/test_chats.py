@@ -86,3 +86,71 @@ def test_list_sessions_limit(tmp_brain: Path):
         time.sleep(0.01)
     sessions = _chats.list_sessions(tmp_brain, limit=3)
     assert len(sessions) == 3
+
+
+def test_read_meta_returns_defaults_when_sidecar_missing(tmp_brain: Path):
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hi")
+    meta = _chats.read_meta(tmp_brain, sid)
+    assert meta["id"] == sid
+    assert meta["title"] == "hi"
+    assert meta["title_locked"] is False
+    assert meta["pinned"] is False
+    assert meta["folder_id"] is None
+    assert meta["created_at"]
+    assert meta["updated_at"]
+
+
+def test_write_meta_round_trip(tmp_brain: Path):
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hi")
+    _chats.write_meta(tmp_brain, sid, title="My title", pinned=True, folder_id="f_1")
+    meta = _chats.read_meta(tmp_brain, sid)
+    assert meta["title"] == "My title"
+    assert meta["title_locked"] is True
+    assert meta["pinned"] is True
+    assert meta["folder_id"] == "f_1"
+
+
+def test_write_meta_partial_update_preserves_other_fields(tmp_brain: Path):
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hi")
+    _chats.write_meta(tmp_brain, sid, title="First", pinned=True)
+    _chats.write_meta(tmp_brain, sid, folder_id="f_2")
+    meta = _chats.read_meta(tmp_brain, sid)
+    assert meta["title"] == "First"
+    assert meta["pinned"] is True
+    assert meta["folder_id"] == "f_2"
+
+
+def test_write_meta_explicit_lock_flag(tmp_brain: Path):
+    """An auto-titler can write title without locking."""
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hi")
+    _chats.write_meta(tmp_brain, sid, title="Auto", title_locked=False)
+    meta = _chats.read_meta(tmp_brain, sid)
+    assert meta["title"] == "Auto"
+    assert meta["title_locked"] is False
+
+
+def test_delete_session_removes_both_files(tmp_brain: Path):
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hi")
+    _chats.write_meta(tmp_brain, sid, title="X")
+    _chats.delete_session(tmp_brain, sid)
+    chats_dir = tmp_brain / "chats"
+    assert not (chats_dir / f"{sid}.jsonl").exists()
+    assert not (chats_dir / f"{sid}.meta.json").exists()
+
+
+def test_delete_session_idempotent(tmp_brain: Path):
+    _chats.delete_session(tmp_brain, "no-such-session")  # must not raise
+
+
+def test_delete_session_meta_only(tmp_brain: Path):
+    """Deleting a session that only has meta (orphaned sidecar) still cleans up."""
+    chats_dir = tmp_brain / "chats"
+    chats_dir.mkdir(parents=True, exist_ok=True)
+    (chats_dir / "orphan.meta.json").write_text("{}")
+    _chats.delete_session(tmp_brain, "orphan")
+    assert not (chats_dir / "orphan.meta.json").exists()
