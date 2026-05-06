@@ -68,3 +68,54 @@ def test_get_session_returns_turns(app):
     assert body["id"] == sid
     assert [t["role"] for t in body["turns"]] == ["user", "assistant"]
     assert [t["content"] for t in body["turns"]] == ["q", "a"]
+
+
+def test_patch_chat_sets_title_and_locks(app):
+    c = TestClient(app)
+    sid = c.post("/api/v1/chats").json()["id"]
+    _chats.append_turn(app.state._brain, sid, "user", "hi")
+    r = c.patch(f"/api/v1/chats/{sid}", json={"title": "Custom"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "Custom"
+    assert body["title_locked"] is True
+
+
+def test_patch_chat_pin(app):
+    c = TestClient(app)
+    sid = c.post("/api/v1/chats").json()["id"]
+    _chats.append_turn(app.state._brain, sid, "user", "hi")
+    r = c.patch(f"/api/v1/chats/{sid}", json={"pinned": True})
+    assert r.status_code == 200
+    assert r.json()["pinned"] is True
+
+
+def test_patch_chat_move_to_folder(app):
+    c = TestClient(app)
+    sid = c.post("/api/v1/chats").json()["id"]
+    _chats.append_turn(app.state._brain, sid, "user", "hi")
+    fid = c.post("/api/v1/folders", json={"name": "Work"}).json()["id"]
+    r = c.patch(f"/api/v1/chats/{sid}", json={"folder_id": fid})
+    assert r.status_code == 200
+    assert r.json()["folder_id"] == fid
+
+
+def test_patch_unknown_chat_returns_404(app):
+    c = TestClient(app)
+    r = c.patch("/api/v1/chats/nope", json={"title": "x"})
+    assert r.status_code == 404
+
+
+def test_delete_chat_removes_files(app):
+    c = TestClient(app)
+    sid = c.post("/api/v1/chats").json()["id"]
+    _chats.append_turn(app.state._brain, sid, "user", "hi")
+    r = c.delete(f"/api/v1/chats/{sid}")
+    assert r.status_code == 204
+    assert c.get("/api/v1/chats").json() == []
+
+
+def test_delete_chat_idempotent(app):
+    c = TestClient(app)
+    r = c.delete("/api/v1/chats/never-existed")
+    assert r.status_code == 204
