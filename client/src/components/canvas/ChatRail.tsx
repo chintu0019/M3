@@ -52,6 +52,14 @@ export function ChatRail({
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [currentStep, setCurrentStep] = useState<string | null>(null);
+  // The current conversation's id. Persisted to localStorage so chats survive
+  // app relaunches; populated lazily on first send when null. The server
+  // appends each turn to ~/brain/chats/<sessionId>.json on a request that
+  // includes session_id, so wiring this through is the whole "make chats
+  // persist" feature.
+  const [sessionId, setSessionId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : localStorage.getItem("m3-session-id"),
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef({ cancelled: false });
 
@@ -61,11 +69,60 @@ export function ChatRail({
 
   useEffect(() => { onTyping(input); }, [input, onTyping]);
 
-  function reset() {
+  // Hydrate from a persisted session on mount. Each previous turn's text +
+  // role gets converted into a RailTurn so the rail looks like the user left
+  // it. Citations from prior turns aren't reconstructed (the SSE event log is
+  // saved server-side but parsing it back into per-turn cite offsets isn't
+  // worth the complexity) — they re-appear if the user re-asks.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    api.getChat(sessionId)
+      .then(res => {
+        if (cancelled) return;
+        const restored: RailTurn[] = res.turns.map(t => ({
+          role: t.role === "user" ? "user" : "assistant",
+          text: t.content,
+          cites: [],
+        }));
+        if (restored.length > 0) setTurns(restored);
+      })
+      .catch(() => {
+        // Server doesn't have this session anymore (file deleted, fresh
+        // brain, etc) — drop the stale id and start clean on next send.
+        localStorage.removeItem("m3-session-id");
+        setSessionId(null);
+      });
+    return () => { cancelled = true; };
+    // Run only on the initial mount-time session id. Reset path flips this
+    // explicitly via setSessionId(null) and we don't want to re-fetch then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function ensureSessionId(): Promise<string> {
+    if (sessionId) return sessionId;
+    const { id } = await api.newChat();
+    localStorage.setItem("m3-session-id", id);
+    setSessionId(id);
+    return id;
+  }
+
+  async function reset() {
     cancelRef.current.cancelled = true;
     setTurns([]);
     setStreaming(false);
     setCurrentStep(null);
+    // Mint a fresh session for the next conversation rather than reusing
+    // the current one. Failing here is non-fatal — the next send will retry
+    // via ensureSessionId.
+    try {
+      const { id } = await api.newChat();
+      localStorage.setItem("m3-session-id", id);
+      setSessionId(id);
+    } catch {
+      localStorage.removeItem("m3-session-id");
+      setSessionId(null);
+    }
     onReset();
   }
 
@@ -74,21 +131,30 @@ export function ChatRail({
     cancelRef.current = { cancelled: false };
     const cancel = cancelRef.current;
     setInput("");
+    // Build history from already-completed turns BEFORE we add the new pair —
+    // role/content shape matches what run_agent expects on the server.
+    const history = turns.map(t => ({ role: t.role, content: t.text }));
     setTurns(t => [
       ...t,
       { role: "user", text, cites: [] },
       { role: "assistant", text: "", cites: [], streaming: true },
     ]);
     setStreaming(true);
-    // Tell the canvas to refetch its cluster against the new query so the
-    // graph follows the conversation. Fire-and-forget — fast enough that
-    // by the time citations stream in, the new cluster is usually in place.
     onSend(text);
 
     let finalText = "";
+    let sid: string;
+    try {
+      sid = await ensureSessionId();
+    } catch (e) {
+      // Couldn't mint a session — fall through to a non-persistent send so
+      // the user still gets a reply. Surface this in the assistant turn.
+      finalText = `(could not create session: ${e instanceof Error ? e.message : String(e)})`;
+      sid = "";
+    }
 
     try {
-      for await (const ev of api.chat(text)) {
+      for await (const ev of api.chat(text, history, sid || undefined)) {
         if (cancel.cancelled) return;
         if (ev.type === "tool_call") {
           // Surface what the agent is doing right now. Each round can take
