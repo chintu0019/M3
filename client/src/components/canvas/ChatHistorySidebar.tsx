@@ -186,17 +186,19 @@ export function ChatHistorySidebar({
               onChange={e => setFolderDraft(e.target.value)}
               placeholder="Folder name"
               onBlur={() => {
+                // Single commit site: Enter routes here via .blur() below so
+                // we don't double-fire createFolder.
                 const v = folderDraft.trim();
                 if (v) createFolder(v);
                 setCreatingFolder(false);
+                setFolderDraft("");
               }}
               onKeyDown={e => {
-                if (e.key === "Enter") {
-                  const v = folderDraft.trim();
-                  if (v) createFolder(v);
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") {
+                  setFolderDraft("");
                   setCreatingFolder(false);
                 }
-                if (e.key === "Escape") setCreatingFolder(false);
               }}
             />
           )}
