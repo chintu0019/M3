@@ -2,7 +2,7 @@
 
 After the first assistant turn lands on a fresh session, ask the configured
 LLM for a 3-6 word title and persist it. Locked titles (user renames) are
-skipped. Failures are swallowed — the user always sees *some* title via the
+skipped. Failures are swallowed: the user always sees *some* title via the
 derived-first-user-message fallback in read_meta.
 """
 
