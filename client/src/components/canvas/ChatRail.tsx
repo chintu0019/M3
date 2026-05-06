@@ -51,6 +51,7 @@ export function ChatRail({
   const [turns, setTurns] = useState<RailTurn[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef({ cancelled: false });
 
@@ -64,6 +65,7 @@ export function ChatRail({
     cancelRef.current.cancelled = true;
     setTurns([]);
     setStreaming(false);
+    setCurrentStep(null);
     onReset();
   }
 
@@ -88,16 +90,33 @@ export function ChatRail({
     try {
       for await (const ev of api.chat(text)) {
         if (cancel.cancelled) return;
-        if (ev.type === "final") {
+        if (ev.type === "tool_call") {
+          // Surface what the agent is doing right now. Each round can take
+          // several seconds (esp. for subprocess-based agents like gemini),
+          // so showing the current step turns dead-air "..." into "Searching
+          // for X" / "Reading Y" — the wait reads as productive. We KEEP
+          // this label after the matching tool_result fires (those events
+          // arrive within milliseconds and React would otherwise batch them
+          // into a single "Thinking" render, swallowing the meaningful
+          // label entirely).
+          setCurrentStep(describeToolCall(ev.tool_name ?? "", ev.tool_input ?? {}));
+        } else if (ev.type === "tool_result") {
+          // Intentionally a no-op for currentStep: the next tool_call (or
+          // the final answer) will replace it.
+        } else if (ev.type === "final") {
           finalText = ev.content || "";
+          setCurrentStep(null);
         } else if (ev.type === "error") {
           finalText = `(error: ${ev.content || "unknown"})`;
+          setCurrentStep(null);
         } else if (ev.type === "unconfigured") {
           finalText = `M3 has no AI agent configured. ${ev.reason || "Open Settings to pick one."}`;
+          setCurrentStep(null);
         }
       }
     } catch (e) {
       finalText = `(network error: ${e instanceof Error ? e.message : String(e)})`;
+      setCurrentStep(null);
     }
 
     if (cancel.cancelled) return;
@@ -136,6 +155,7 @@ export function ChatRail({
 
     setTurns(t => updateLast(t, last => ({ ...last, streaming: false })));
     setStreaming(false);
+    setCurrentStep(null);
   }
 
   return (
@@ -171,8 +191,11 @@ export function ChatRail({
         ))}
 
         {streaming && turns.at(-1)?.text === "" && (
-          <div className="m3-chat-rail__streaming">
-            <span className="m3-dot" /><span className="m3-dot" /><span className="m3-dot" />
+          <div className="m3-chat-rail__step">
+            <span className="m3-chat-rail__streaming">
+              <span className="m3-dot" /><span className="m3-dot" /><span className="m3-dot" />
+            </span>
+            <span className="m3-chat-rail__step-label">{currentStep ?? "Thinking"}</span>
           </div>
         )}
       </div>
@@ -279,6 +302,34 @@ function updateLast(turns: RailTurn[], fn: (t: RailTurn) => RailTurn): RailTurn[
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+/**
+ * Friendly label for the current agent step. Tool names are stable from
+ * server/m3/core/tools.py — keep the cases in sync if new tools land.
+ */
+function describeToolCall(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case "search_brain": {
+      const q = String((input.query as string) ?? "").trim();
+      return q ? `Searching for "${truncate(q, 32)}"` : "Searching brain";
+    }
+    case "open_item":
+      return "Opening item";
+    case "open_entity": {
+      const slug = String((input.slug as string) ?? "").trim();
+      return slug ? `Reading ${truncate(slug, 32)}` : "Reading entity";
+    }
+    case "list_open_questions":
+      return "Listing open questions";
+    default:
+      return name ? name.replace(/_/g, " ") : "Working";
+  }
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }
 
 /**

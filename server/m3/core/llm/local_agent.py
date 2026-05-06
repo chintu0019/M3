@@ -228,7 +228,23 @@ class LocalAgentProvider(LLMProvider):
         status = "ok"
         try:
             text = await self._run(prompt)
-            return parse_tool_response(text, chosen, raw_response={"text": text})
+            try:
+                return parse_tool_response(text, chosen, raw_response={"text": text})
+            except ValueError:
+                # The CLI replied with prose instead of a tool-call JSON. That's
+                # the model's way of saying "I have an answer, I don't need a
+                # tool" — return an empty-toolname ToolResult so run_agent
+                # promotes `text` to the final answer rather than crashing the
+                # whole turn with an error event.
+                status = "fallback:plain_text"
+                logger.info("local_agent: prose response, falling back to final-answer text")
+                return ToolResult(
+                    tool_name="",
+                    input={},
+                    stop_reason="end_turn",
+                    text=text,
+                    raw_response={"text": text},
+                )
         except Exception as e:
             status = f"error:{type(e).__name__}"
             logger.warning("local_agent complete_tool failed: %s", e)

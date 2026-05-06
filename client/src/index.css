@@ -176,9 +176,23 @@ body { overflow: hidden; }
 .m3-cite:hover { background: oklch(0.28 0.014 260); }
 
 .m3-chat-rail__streaming {
-  display: flex;
+  display: inline-flex;
   gap: 4px;
   padding: 6px 0;
+  align-items: center;
+}
+.m3-chat-rail__step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--m3-muted);
+}
+.m3-chat-rail__step-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 .m3-dot {
   width: 5px;
