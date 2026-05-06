@@ -119,3 +119,14 @@ def test_delete_chat_idempotent(app):
     c = TestClient(app)
     r = c.delete("/api/v1/chats/never-existed")
     assert r.status_code == 204
+
+
+def test_delete_folder_orphans_member_chats(app):
+    c = TestClient(app)
+    fid = c.post("/api/v1/folders", json={"name": "Work"}).json()["id"]
+    sid = c.post("/api/v1/chats").json()["id"]
+    _chats.append_turn(app.state._brain, sid, "user", "hi")
+    c.patch(f"/api/v1/chats/{sid}", json={"folder_id": fid})
+    c.delete(f"/api/v1/folders/{fid}")
+    listing = c.get("/api/v1/chats").json()
+    assert listing[0]["folder_id"] is None
