@@ -11,11 +11,12 @@ export interface ToolbarProps {
   zoom: number;
   setZoom: (k: number) => void;
   onSettings: () => void;
+  onFiles: () => void;
   unconfigured: boolean;
 }
 
 export function Toolbar({
-  variant, setVariant, onFit, zoom, setZoom, onSettings, unconfigured,
+  variant, setVariant, onFit, zoom, setZoom, onSettings, onFiles, unconfigured,
 }: ToolbarProps) {
   return (
     <div className="m3-toolbar">
@@ -33,6 +34,16 @@ export function Toolbar({
         <button onClick={() => setZoom(zoom * 1.2)} aria-label="Zoom in">+</button>
         <button onClick={onFit}>Fit</button>
       </div>
+      <button
+        className="m3-toolbar__gear"
+        onClick={onFiles}
+        title="Files"
+        aria-label="Files"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        </svg>
+      </button>
       <button
         className="m3-toolbar__gear"
         onClick={onSettings}

@@ -24,6 +24,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[dict] | None = None
     session_id: str | None = None    # when set, the turn is persisted to ~/brain/chats/
+    scope_item_id: str | None = None # when set, scope retrieval + pin context to this item
 
 
 def build_chat_router(*, brain_root: Path, embedder: _Embedder, llm_factory: Callable | None = None) -> APIRouter:
@@ -54,7 +55,7 @@ def build_chat_router(*, brain_root: Path, embedder: _Embedder, llm_factory: Cal
 
             return StreamingResponse(unconfigured_gen(), media_type="text/event-stream")
 
-        tools = BrainTools(brain_root=brain_root, embedder=embedder)
+        tools = BrainTools(brain_root=brain_root, embedder=embedder, scope_item_id=body.scope_item_id)
 
         async def gen():
             collected_events: list[dict] = []

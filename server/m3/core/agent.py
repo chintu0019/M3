@@ -45,9 +45,14 @@ async def run_agent(
                  for s in tools.schemas()]
     messages: list[dict] = list(history or []) + [{"role": "user", "content": user_message}]
 
+    system = SYSTEM_PROMPT
+    pinned = tools.pinned_context_block()
+    if pinned:
+        system = SYSTEM_PROMPT + "\n\n" + pinned
+
     for round_idx in range(MAX_TOOL_ROUNDS):
         result = await llm.complete_tool(
-            messages=messages, tools=tool_objs, system=SYSTEM_PROMPT,
+            messages=messages, tools=tool_objs, system=system,
             tool_choice=None,                      # let the LLM decide
             max_tokens=2048, temperature=0.2,
         )
@@ -74,6 +79,6 @@ async def run_agent(
     forced_text = await llm.complete(
         messages=messages + [{"role": "user",
                               "content": "You've used your tool rounds. Give your best answer now based on the tool results above; do not call any more tools."}],
-        system=SYSTEM_PROMPT, max_tokens=1024, temperature=0.2,
+        system=system, max_tokens=1024, temperature=0.2,
     )
     yield AgentEvent(type="final", content=(forced_text or "").strip() or "(tool round limit reached)")

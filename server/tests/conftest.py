@@ -88,8 +88,17 @@ def fake_llm() -> FakeLLM:
 
 @pytest.fixture(autouse=True)
 def _git_identity_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ensure git commits in tests have an identity, without touching the user's global config."""
+    """Ensure git commits in tests have an identity, without touching the user's global config.
+
+    Also disables commit signing in test brain repos: some sandboxed CI
+    environments inject `gpg.format=ssh` + a signing program globally, and
+    the brain repos can't reach that signer. Tests don't need signed commits.
+    """
     monkeypatch.setenv("GIT_AUTHOR_NAME", "m3-test")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@m3.local")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "m3-test")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@m3.local")
+    # GIT_CONFIG_COUNT/KEY/VALUE lets us inject overrides without writing to ~/.gitconfig.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")

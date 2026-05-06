@@ -53,7 +53,7 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     app.include_router(build_self_router(brain_root=brain_root))
     app.include_router(build_entities_router(brain_root=brain_root))
     app.include_router(build_questions_router(brain_root=brain_root))
-    app.include_router(build_items_router(brain_root=brain_root))
+    app.include_router(build_items_router(brain_root=brain_root, embedder=embedder, llm_factory=llm_factory))
     app.include_router(build_chat_router(brain_root=brain_root, embedder=embedder, llm_factory=llm_factory))
     app.include_router(build_chats_router(brain_root=brain_root))
     app.include_router(build_cluster_router(brain_root=brain_root, embedder=embedder))

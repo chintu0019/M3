@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type ClusterResponse, type LLMSettings } from "../api/client";
 import { ChatRail, type CitedRef } from "../components/canvas/ChatRail";
+import { FilesModal } from "../components/canvas/files/FilesModal";
 import { Graph, type GraphLink } from "../components/canvas/Graph";
 import { Legend } from "../components/canvas/Legend";
 import { SettingsModal } from "../components/canvas/SettingsModal";
@@ -57,6 +58,7 @@ export default function Canvas() {
   const [cluster, setCluster] = useState<ClusterResponse | null>(null);
   const [clusterErr, setClusterErr] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [settings, setSettings] = useState<LLMSettings | null>(null);
 
   const [highlighted, setHighlighted] = useState<Set<string>>(new Set());
@@ -366,6 +368,7 @@ export default function Canvas() {
           zoom={cameraRef.current.k}
           setZoom={setZoom}
           onSettings={() => setSettingsOpen(true)}
+          onFiles={() => setFilesOpen(true)}
           unconfigured={settings != null && !settings.configured}
         />
         <div className="m3-bottom-right">
@@ -373,6 +376,34 @@ export default function Canvas() {
         </div>
       </main>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <FilesModal
+        open={filesOpen}
+        onClose={() => setFilesOpen(false)}
+        onIngest={resp => {
+          // Pulse each touched entity node so the user sees their upload
+          // strengthening the graph in real time. We refetch the cluster
+          // afterwards so newly-created entities show up too.
+          const touched = (resp.entities_touched || []).map(slugify);
+          for (const slug of touched) {
+            const id = `entity:${slug}`;
+            if (layout.byId.has(id)) {
+              setPulseId(id);
+              window.setTimeout(() => setPulseId(p => (p === id ? null : p)), 1400);
+            }
+          }
+          api.clusterAll().then(setCluster).catch(() => {});
+        }}
+        onFocusEntity={slug => focusNode(`entity:${slug}`)}
+      />
     </div>
   );
+}
+
+function slugify(name: string): string {
+  return (name || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "unknown";
 }
