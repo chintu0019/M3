@@ -176,6 +176,11 @@ def start(
     brain: Path = typer.Option(None, "--brain", help="Brain directory."),
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
     port: int = typer.Option(7007, "--port", help="Bind port."),
+    parent_pid: int = typer.Option(
+        None, "--parent-pid",
+        help="If set, exit when this PID disappears. Used by the desktop shell "
+             "so a force-killed Tauri parent doesn't leave a stranded server.",
+    ),
 ):
     """Start the local M3 server."""
     import os as _os
@@ -183,8 +188,43 @@ def start(
         _os.environ["M3_BRAIN"] = str(brain)
     _os.environ["M3_HOST"] = host
     _os.environ["M3_PORT"] = str(port)
+    if parent_pid is not None:
+        _start_parent_watchdog(parent_pid)
     from m3.app import run as _run
     _run()
+
+
+def _start_parent_watchdog(parent_pid: int) -> None:
+    """Background daemon thread: poll the parent PID, self-exit when it vanishes.
+
+    This is the only reliable cleanup for the case where the Tauri shell is
+    force-killed (kill -9, system shutdown, OOM). On Unix we use os.kill with
+    signal 0, which raises ProcessLookupError when the process is gone but
+    doesn't actually deliver a signal.
+    """
+    import os as _os
+    import signal as _signal
+    import threading
+    import time as _time
+
+    def _watch():
+        while True:
+            try:
+                _os.kill(parent_pid, 0)
+            except ProcessLookupError:
+                # Parent gone, take down the whole process group so uvicorn
+                # workers and any subprocess agents die with us.
+                try:
+                    _os.killpg(_os.getpgrp(), _signal.SIGTERM)
+                except OSError:
+                    pass
+                _os._exit(0)
+            except PermissionError:
+                # Parent exists but we can't signal it; treat as alive.
+                pass
+            _time.sleep(2)
+
+    threading.Thread(target=_watch, daemon=True, name="parent-watchdog").start()
 
 
 @app.command("eval")

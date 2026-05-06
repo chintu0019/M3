@@ -34,7 +34,56 @@ const DEFAULT_PORT: u16 = 7007;
 const STARTUP_TIMEOUT_SECS: u64 = 25;
 
 /// Handle to the child m3 server, kept alive for the lifetime of the app.
+///
+/// The Drop impl is the load-bearing piece: Tauri's RunEvent fires inconsistently
+/// across macOS quit paths (red close button vs Cmd+Q vs dock-quit vs ⌘⌥esc),
+/// but Drop runs when the Tauri AppHandle goes out of scope at process end,
+/// which is the one universal hook. We also try to clean up earlier when the
+/// shell knows it's quitting (see RunEvent handler) so the child exits before
+/// the user's terminal/log gets noisy.
 struct M3Child(Mutex<Option<Child>>);
+
+impl M3Child {
+    /// Send SIGTERM to the entire process group, wait briefly, escalate to
+    /// SIGKILL on the immediate child if needed. Idempotent.
+    fn shutdown(&self) {
+        let Ok(mut guard) = self.0.lock() else { return };
+        let Some(mut child) = guard.take() else { return };
+
+        #[cfg(unix)]
+        {
+            // The child was spawned with process_group(0) so its pgid == its pid.
+            // Negative pid = whole group, killing python + any subprocess workers.
+            let pid = child.id() as i32;
+            unsafe { libc::kill(-pid, libc::SIGTERM) };
+
+            // Give the child up to ~1.5s to clean up gracefully (uvicorn shutdown
+            // hooks, file flushes), then SIGKILL the group.
+            let deadline = Instant::now() + Duration::from_millis(1500);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => return,
+                    _ => {
+                        if Instant::now() >= deadline { break; }
+                        sleep(Duration::from_millis(50));
+                    }
+                }
+            }
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+    }
+}
+
+impl Drop for M3Child {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
 
 // ── Python discovery ────────────────────────────────────────────────────────
 
@@ -351,19 +400,33 @@ fn augmented_path() -> String {
 
 fn spawn_m3_server(m3: &Path, port: u16) -> Result<Child, String> {
     if port_is_open(port) {
-        // Something already listens — assume it's a dev m3 we want to reuse.
+        // Something already listens, assume it's a dev m3 we want to reuse.
         return Command::new(if cfg!(windows) { "cmd" } else { "true" })
             .args(if cfg!(windows) { &["/C", "exit"][..] } else { &[] })
             .spawn()
             .map_err(|e| e.to_string());
     }
-    Command::new(m3)
-        .args(["start", "--port", &port.to_string(), "--host", "127.0.0.1"])
+    // Pass our pid so the child can self-exit if we get force-killed.
+    // Belt-and-braces with the Drop impl on M3Child below.
+    let parent_pid = std::process::id().to_string();
+    let mut cmd = Command::new(m3);
+    cmd.args([
+            "start",
+            "--port", &port.to_string(),
+            "--host", "127.0.0.1",
+            "--parent-pid", &parent_pid,
+        ])
         .env("PATH", augmented_path())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| format!("failed to spawn m3 start: {e}"))
+        .stderr(Stdio::inherit());
+    // New process group so we can kill the python plus any of its descendants
+    // (uvicorn workers, subprocess agents) atomically. Available on Unix only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.spawn().map_err(|e| format!("failed to spawn m3 start: {e}"))
 }
 
 // ── Entrypoint ──────────────────────────────────────────────────────────────
@@ -414,23 +477,22 @@ fn main() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {
                 if let Some(state) = window.try_state::<M3Child>() {
-                    if let Some(mut child) = state.0.lock().unwrap().take() {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                    }
+                    state.shutdown();
                 }
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if let RunEvent::ExitRequested { .. } = event {
-                if let Some(state) = app_handle.try_state::<M3Child>() {
-                    if let Some(mut child) = state.0.lock().unwrap().take() {
-                        let _ = child.kill();
-                        let _ = child.wait();
+            // Cover every quit path Tauri exposes. shutdown() is idempotent so
+            // double-firing is fine. Drop on M3Child is the final safety net.
+            match event {
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                    if let Some(state) = app_handle.try_state::<M3Child>() {
+                        state.shutdown();
                     }
                 }
+                _ => {}
             }
         });
 }
