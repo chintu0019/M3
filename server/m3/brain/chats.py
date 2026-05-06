@@ -165,11 +165,13 @@ def delete_session(root: Path, sid: str) -> None:
             pass
 
 
-def list_sessions(root: Path, *, limit: int = 20) -> list[dict]:
+def list_sessions(root: Path, *, limit: int = 200) -> list[dict]:
     """Return session summaries, newest first.
 
-    Summary: {id, title, message_count, last_ts}. Empty sessions (no turns
-    written yet) are skipped.
+    Summary: {id, title, message_count, last_ts, pinned, folder_id,
+    title_locked, created_at, updated_at}. Empty sessions (no turns
+    written yet) are skipped. Default limit raised to 200 because the
+    sidebar is the only consumer and it wants the full history.
     """
     files = sorted(_dir(root).glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     out: list[dict] = []
@@ -178,16 +180,16 @@ def list_sessions(root: Path, *, limit: int = 20) -> list[dict]:
         turns = load_session(root, sid)
         if not turns:
             continue
-        # Title: first user message, truncated.
-        title = "(empty)"
-        for t in turns:
-            if t.get("role") == "user":
-                title = (t.get("content") or "")[:60]
-                break
+        meta = read_meta(root, sid)
         out.append({
             "id": sid,
-            "title": title,
+            "title": meta["title"],
+            "title_locked": meta["title_locked"],
             "message_count": len(turns),
             "last_ts": turns[-1]["ts"],
+            "pinned": meta["pinned"],
+            "folder_id": meta["folder_id"],
+            "created_at": meta["created_at"],
+            "updated_at": meta["updated_at"],
         })
     return out

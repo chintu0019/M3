@@ -165,3 +165,24 @@ def test_read_meta_tolerates_non_dict_sidecar(tmp_brain: Path):
     meta = _chats.read_meta(tmp_brain, sid)
     assert meta["title"] == "hi"  # falls back to derived
     assert meta["pinned"] is False
+
+
+def test_list_sessions_includes_meta_fields(tmp_brain: Path):
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "hello")
+    _chats.write_meta(tmp_brain, sid, title="Custom", pinned=True, folder_id="f_x")
+    sessions = _chats.list_sessions(tmp_brain)
+    assert sessions[0]["title"] == "Custom"
+    assert sessions[0]["pinned"] is True
+    assert sessions[0]["folder_id"] == "f_x"
+    assert sessions[0]["updated_at"]
+
+
+def test_list_sessions_without_sidecar_uses_defaults(tmp_brain: Path):
+    """Sessions from before the sidecar feature shipped still appear."""
+    sid = _chats.new_session(tmp_brain)
+    _chats.append_turn(tmp_brain, sid, "user", "legacy chat")
+    sessions = _chats.list_sessions(tmp_brain)
+    assert sessions[0]["title"] == "legacy chat"
+    assert sessions[0]["pinned"] is False
+    assert sessions[0]["folder_id"] is None
