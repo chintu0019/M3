@@ -99,11 +99,14 @@ def load_session(root: Path, sid: str) -> list[dict]:
     return out
 
 
-def read_meta(root: Path, sid: str) -> dict[str, Any]:
+def read_meta(root: Path, sid: str, *, _turns: list[dict] | None = None) -> dict[str, Any]:
     """Return persisted metadata for a session, falling back to derived defaults
     when the sidecar is missing. Sessions without a sidecar (e.g. ones created
     before this feature shipped) appear in the listing with sensible defaults
-    so nothing requires a migration step."""
+    so nothing requires a migration step.
+
+    `_turns` is an optimization for callers that already loaded the session —
+    when provided, the lazy `load_session` call inside is skipped entirely."""
     path = _meta_path(root, sid)
     persisted: dict[str, Any] = {}
     if path.exists():
@@ -116,7 +119,12 @@ def read_meta(root: Path, sid: str) -> dict[str, Any]:
 
     jsonl = _session_path(root, sid)
     persisted_title = persisted.get("title")
-    turns = load_session(root, sid) if not persisted_title else []
+    if persisted_title:
+        turns: list[dict] = []
+    elif _turns is not None:
+        turns = _turns
+    else:
+        turns = load_session(root, sid)
     if jsonl.exists():
         mtime_iso = datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat()
         ctime_iso = datetime.fromtimestamp(jsonl.stat().st_ctime, tz=timezone.utc).isoformat()
@@ -180,7 +188,7 @@ def list_sessions(root: Path, *, limit: int = 200) -> list[dict]:
         turns = load_session(root, sid)
         if not turns:
             continue
-        meta = read_meta(root, sid)
+        meta = read_meta(root, sid, _turns=turns)
         out.append({
             "id": sid,
             "title": meta["title"],
