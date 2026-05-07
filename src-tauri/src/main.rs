@@ -241,11 +241,14 @@ fn create_venv(python: &Path, venv: &Path) -> Result<(), String> {
 
 fn install_wheel(venv: &Path, wheel: &Path) -> Result<(), String> {
     let pip = venv_bin(venv, "pip");
-    // --upgrade so that bumping versions (or unchanged version with rebuilt
-    // dependencies) actually replaces the installed copy.
+    // --force-reinstall replaces the installed copy even when the wheel's
+    // version string hasn't changed (common during development and for
+    // auto-update bundles that rebuild without a version bump). --no-deps
+    // keeps it fast: the dep set rarely changes between m3 builds, and a
+    // fresh full resolve here would add 30+ seconds to every reconcile.
     run_capturing(
         Command::new(&pip)
-            .args(["install", "--upgrade", "--quiet", wheel.to_str().unwrap()]),
+            .args(["install", "--force-reinstall", "--no-deps", "--quiet", wheel.to_str().unwrap()]),
     )
     .map_err(|e| format!("pip install failed: {e}"))
 }
