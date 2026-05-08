@@ -32,6 +32,15 @@ mkdir -p "$RESOURCES"
 step "Clearing stale wheels in $RESOURCES"
 rm -f "$RESOURCES"/*.whl
 
+step "Clearing setuptools build cache (server/build/, server/m3.egg-info/)"
+# setuptools accumulates a copy of every file ever built into
+# server/build/lib/, including stale client/dist asset hashes from prior
+# vite builds. Without wiping it, the wheel ends up containing the union
+# of all builds — old script bundles shipping alongside the current one,
+# and the wheel's index.html may reference assets from a stale build that
+# don't exist in the wheel anymore. Blank webview, hours of confusion.
+rm -rf "$ROOT/server/build" "$ROOT/server/m3.egg-info"
+
 DIST_SRC="$ROOT/client/dist"
 DIST_DST="$ROOT/server/m3/_client_dist"
 

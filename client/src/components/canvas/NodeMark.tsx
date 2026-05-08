@@ -84,14 +84,15 @@ export function NodeMark({
             <circle r={radius} fill="oklch(0.26 0.06 340)" stroke={color} strokeWidth={1.5} filter="url(#m3-soft-glow)" />
             <text
               textAnchor="middle"
-              y={6}
+              y={5}
               fill="oklch(0.98 0.005 260)"
               fontFamily="Inter, system-ui, sans-serif"
-              fontSize={radius * 0.7}
+              fontSize={radius * 0.42}
               fontWeight={600}
+              letterSpacing="0.04em"
               style={{ pointerEvents: "none" }}
             >
-              {node.label[0]?.toUpperCase() ?? "?"}
+              {node.label || "You"}
             </text>
           </>
         ) : (
@@ -115,14 +116,14 @@ export function NodeMark({
           />
           <text
             textAnchor="middle"
-            y={5}
+            y={4}
             fill="oklch(0.98 0.005 260)"
             fontFamily="'JetBrains Mono', monospace"
-            fontSize={radius * 0.6}
+            fontSize={radius * 0.38}
             fontWeight={600}
-            style={{ pointerEvents: "none", letterSpacing: "0.04em" }}
+            style={{ pointerEvents: "none", letterSpacing: "0.06em", textTransform: "uppercase" }}
           >
-            {node.label[0]?.toUpperCase() ?? "?"}
+            {node.label || "You"}
           </text>
         </>
       ) : (

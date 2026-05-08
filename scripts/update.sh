@@ -40,12 +40,17 @@ else
   ok "Repo up to date at $(git rev-parse --short HEAD)"
 fi
 
-step "Building m3 wheel into src-tauri/resources/"
-"$ROOT/scripts/build-wheel.sh"
-
 step "Rebuilding React frontend bundle"
 ( cd client && npm install --no-audit --no-fund && npm run build )
 ok "Frontend bundle ready at client/dist"
+
+step "Building m3 wheel into src-tauri/resources/"
+# Must run AFTER the frontend build: build-wheel.sh vendors client/dist into
+# server/m3/_client_dist before packaging the wheel. If the order is flipped
+# the wheel embeds whatever stale dist was lying around, and the running
+# Python server ends up serving an index.html that references script hashes
+# that no longer exist — leaving the webview blank on launch.
+"$ROOT/scripts/build-wheel.sh"
 
 step "Rebuilding Tauri desktop app"
 ( cd src-tauri && cargo tauri build )
