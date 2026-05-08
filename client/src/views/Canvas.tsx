@@ -97,6 +97,15 @@ export default function Canvas() {
   // (the auto-title pass writes async on the server, so we delay slightly).
   const [chatsRefreshKey, setChatsRefreshKey] = useState(0);
 
+  // Bumped on every "new chat" click so ChatRail can always respond visibly,
+  // even when activeSessionId was already null and React would otherwise
+  // short-circuit setActiveSessionId(null).
+  const [newChatNonce, setNewChatNonce] = useState(0);
+  const startNewChat = useCallback(() => {
+    setActiveSessionId(null);
+    setNewChatNonce(n => n + 1);
+  }, []);
+
   // Sources view: items (raw uploaded files) are hidden by default so the
   // canvas reads as concept-first. Click an entity to expand its sources, or
   // flip the toolbar toggle to show every item globally.
@@ -438,7 +447,7 @@ export default function Canvas() {
       <ChatHistorySidebar
         activeSessionId={activeSessionId}
         onSelectSession={(sid) => setActiveSessionId(sid)}
-        onNewChat={() => setActiveSessionId(null)}
+        onNewChat={startNewChat}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
         refreshKey={chatsRefreshKey}
@@ -454,6 +463,7 @@ export default function Canvas() {
         suggestions={SUGGESTIONS}
         sessionId={activeSessionId}
         onSessionChange={setActiveSessionId}
+        newChatNonce={newChatNonce}
       />
       <main className="m3-canvas-area" ref={containerRef}>
         {clusterErr && (

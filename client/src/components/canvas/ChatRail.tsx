@@ -46,18 +46,40 @@ export interface ChatRailProps {
   sessionId: string | null;
   /** Notify parent of session id changes (mint on first send, reset on "+"). */
   onSessionChange: (sid: string | null) => void;
+  /** Bumps on every "new chat" trigger from the parent. Watched by the rail
+   *  so that clicking "+" always feels responsive (clears draft, focuses
+   *  input) even when sessionId was already null and React would otherwise
+   *  short-circuit the state update. */
+  newChatNonce?: number;
 }
 
 export function ChatRail({
   onTyping, onSend, onCitation, resolveCitation, cited, onCitedClick, onReset,
-  suggestions, sessionId, onSessionChange,
+  suggestions, sessionId, onSessionChange, newChatNonce = 0,
 }: ChatRailProps) {
   const [turns, setTurns] = useState<RailTurn[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [currentStep, setCurrentStep] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef({ cancelled: false });
+
+  // Parent bumps newChatNonce on every "+" click. Always reset and focus the
+  // input — even when sessionId was already null (in which case the
+  // sessionId-driven effect would no-op). Skip on the initial mount; that's
+  // covered by the sessionId effect below.
+  const initialNonceRef = useRef(newChatNonce);
+  useEffect(() => {
+    if (newChatNonce === initialNonceRef.current) return;
+    cancelRef.current.cancelled = true;
+    setTurns([]);
+    setInput("");
+    setStreaming(false);
+    setCurrentStep(null);
+    if (sessionId !== null) onSessionChange(null);
+    inputRef.current?.focus();
+  }, [newChatNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -273,6 +295,7 @@ export function ChatRail({
         onSubmit={e => { e.preventDefault(); send(input); }}
       >
         <input
+          ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
           placeholder="Ask your knowledge base…"
