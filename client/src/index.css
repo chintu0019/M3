@@ -912,7 +912,11 @@ body { overflow: hidden; }
 }
 .m3-files {
   display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) 1.4fr;
+  /* minmax(0, ...) on both tracks: without it, grid columns default to
+     `min-width: auto` and stretch to fit intrinsic-content (a long iframe,
+     a non-wrapping <pre>, etc.), blowing out the modal's max-width and
+     squeezing the list column so the row's "Archive" button gets clipped. */
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.4fr);
   height: min(86vh, 820px);
   min-height: 0;
 }
@@ -921,11 +925,13 @@ body { overflow: hidden; }
   flex-direction: column;
   border-right: 1px solid var(--m3-line);
   min-height: 0;
+  min-width: 0;
 }
 .m3-files__detail-pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 .m3-files__empty {
   display: flex;
@@ -1079,7 +1085,16 @@ body { overflow: hidden; }
   gap: 6px;
   margin-top: 2px;
 }
-.m3-files__row-action { font-size: 11px; padding: 4px 8px; }
+/* m3-btn-ghost is sized as a 26x26 icon button. These rules pull the text
+   variants used in the Files modal back into auto-sizing so labels like
+   "Archive" / "Re-extract" / "Download" actually fit their content. */
+.m3-files__row-action {
+  width: auto;
+  height: auto;
+  font-size: 11px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
 .m3-files__row-empty {
   padding: 36px 24px;
   text-align: center;
@@ -1105,7 +1120,10 @@ body { overflow: hidden; }
   flex: 1;
 }
 .m3-files__detail-head {
-  padding: 14px 16px;
+  /* Right padding clears the modal's absolute-positioned close button
+     (top:12 right:12, width:28). Without it the action row collides with
+     the X and the buttons appear to wrap on top of each other. */
+  padding: 14px 52px 14px 16px;
   border-bottom: 1px solid var(--m3-line);
   display: flex;
   align-items: center;
@@ -1119,9 +1137,16 @@ body { overflow: hidden; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m3-files__detail-actions { display: flex; gap: 6px; }
+.m3-files__detail-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .m3-files__detail-actions a,
-.m3-files__detail-actions button { font-size: 11px; padding: 4px 10px; text-decoration: none; }
+.m3-files__detail-actions button {
+  width: auto;
+  height: auto;
+  font-size: 11px;
+  padding: 4px 10px;
+  text-decoration: none;
+  white-space: nowrap;
+}
 .m3-files__tabs {
   display: flex;
   gap: 0;
