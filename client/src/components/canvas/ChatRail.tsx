@@ -97,6 +97,13 @@ export function ChatRail({
       setTurns([]);
       return;
     }
+    // We just minted this id inside send() and have optimistic turns in
+    // local state. Skip the fetch entirely; the empty-session 404 would
+    // route through the catch below and wipe everything.
+    if (justMintedRef.current === sessionId) {
+      justMintedRef.current = null;
+      return;
+    }
     let cancelled = false;
     api.getChat(sessionId)
       .then(res => {
@@ -117,9 +124,15 @@ export function ChatRail({
     return () => { cancelled = true; };
   }, [sessionId, onSessionChange]);
 
+  // Tracks ids we just minted ourselves inside send(). The hydration effect
+  // checks this ref and skips fetching for those, preventing the empty-session
+  // 404 from wiping our optimistic turns mid-stream.
+  const justMintedRef = useRef<string | null>(null);
+
   async function ensureSessionId(): Promise<string> {
     if (sessionId) return sessionId;
     const { id } = await api.newChat();
+    justMintedRef.current = id;
     onSessionChange(id);
     return id;
   }
