@@ -9,7 +9,17 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/api": "http://127.0.0.1:7007",
+      "/api": {
+        target: "http://127.0.0.1:7007",
+        // SSE streams (e.g. /api/v1/chat) need headers/body flushed line-by-
+        // line. The default http-proxy config buffers, so the chat rail sees
+        // no tool_call/tool_result/final events until the request closes —
+        // which can be 30+ seconds for slow CLIs. selfHandleResponse=false
+        // and ws=true together keep streams unbuffered.
+        changeOrigin: true,
+        ws: true,
+        selfHandleResponse: false,
+      },
     },
   },
 });
