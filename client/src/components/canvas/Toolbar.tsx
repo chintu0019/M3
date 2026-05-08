@@ -13,10 +13,13 @@ export interface ToolbarProps {
   onSettings: () => void;
   onFiles: () => void;
   unconfigured: boolean;
+  showAllSources: boolean;
+  onToggleSources: () => void;
 }
 
 export function Toolbar({
   variant, setVariant, onFit, zoom, setZoom, onSettings, onFiles, unconfigured,
+  showAllSources, onToggleSources,
 }: ToolbarProps) {
   return (
     <div className="m3-toolbar">
@@ -34,6 +37,14 @@ export function Toolbar({
         <button onClick={() => setZoom(zoom * 1.2)} aria-label="Zoom in">+</button>
         <button onClick={onFit}>Fit</button>
       </div>
+      <button
+        className={`m3-toolbar__sources${showAllSources ? " on" : ""}`}
+        onClick={onToggleSources}
+        title={showAllSources ? "Hide raw uploaded sources" : "Reveal raw uploaded sources"}
+        aria-pressed={showAllSources}
+      >
+        Sources
+      </button>
       <button
         className="m3-toolbar__gear"
         onClick={onFiles}

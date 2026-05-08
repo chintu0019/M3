@@ -26,6 +26,9 @@ class NodeModel(BaseModel):
     excerpt: str | None = None
     item_id: str | None = None
     entity_slug: str | None = None
+    claim_id: str | None = None
+    confidence: float | None = None
+    synthesis_id: str | None = None
 
 
 class EdgeModel(BaseModel):

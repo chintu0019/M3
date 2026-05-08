@@ -33,6 +33,10 @@ class BrainPaths:
     @property
     def items_meta(self) -> Path: return self.root / "items" / "meta"
     @property
+    def claims_dir(self) -> Path: return self.root / "claims"
+    @property
+    def syntheses_dir(self) -> Path: return self.root / "syntheses"
+    @property
     def records_dir(self) -> Path: return self.root / "records"
     @property
     def signals_dir(self) -> Path: return self.root / "signals"
@@ -59,7 +63,7 @@ def init_brain(root: Path) -> BrainPaths:
     """Create the ~/brain/ skeleton. Idempotent: existing files are preserved."""
     root.mkdir(parents=True, exist_ok=True)
     p = BrainPaths(root)
-    for d in (p.entities_dir, p.items_originals, p.items_meta, p.records_dir, p.signals_dir, p.index_dir):
+    for d in (p.entities_dir, p.items_originals, p.items_meta, p.claims_dir, p.syntheses_dir, p.records_dir, p.signals_dir, p.index_dir):
         d.mkdir(parents=True, exist_ok=True)
         # Empty directories aren't tracked by git, which means `git clean -fd` on
         # rollback would delete them. A .gitkeep keeps the skeleton intact across

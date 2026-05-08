@@ -117,3 +117,54 @@ def test_few_shots_cover_project_self_action():
     assert '"slot": "Projects"' in FEW_SHOT_EXAMPLES
     # Explicitly NOT attributing the user's purchase to any third-party person
     assert '"entity_type": "project"' in FEW_SHOT_EXAMPLES
+
+
+def test_schema_accepts_claims_field():
+    data = {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x", "when": {"iso": None, "source": "unknown"}, "confidence": 0.5},
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+        "claims": [
+            {"proposition": "M3 is local-first.", "confidence": 0.9, "supporting_span": "M3 is local-first by design.", "entity_names": ["M3"]},
+        ],
+    }
+    out = ExtractionOutput.model_validate(data)
+    assert len(out.claims) == 1
+    assert out.claims[0].proposition == "M3 is local-first."
+    assert out.claims[0].entity_names == ["M3"]
+
+
+def test_claims_default_to_empty_list():
+    data = {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x", "when": {"iso": None, "source": "unknown"}, "confidence": 0.5},
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+    }
+    out = ExtractionOutput.model_validate(data)
+    assert out.claims == []
+
+
+def test_claims_coerces_dict_entity_names():
+    """Mirrors the entity_updates coercion: some models emit {"name": "X"}
+    instead of "X" inside list fields."""
+    data = {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x", "when": {"iso": None, "source": "unknown"}, "confidence": 0.5},
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+        "claims": [
+            {"proposition": "Y is true.", "entity_names": [{"name": "Y"}]},
+        ],
+    }
+    out = ExtractionOutput.model_validate(data)
+    assert out.claims[0].entity_names == ["Y"]
+
+
+def test_system_prompt_documents_claims():
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
+    # Must explain that claims are atomic propositions
+    assert "claims" in s.lower()
+    assert "atomic" in s.lower()
+    # Must mention the Karpathy-style shape (decontextualized + supporting span)
+    assert "decontextualized" in s.lower() or "stand alone" in s.lower()
+    assert "supporting_span" in s or "supporting span" in s.lower()

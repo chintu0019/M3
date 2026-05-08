@@ -278,3 +278,125 @@ async def test_ingest_populates_fts_and_hook_indexes(ingester, fake_llm, tmp_bra
     hook_hits = h_idx.search("aditya", types=["who"], k=5)
     assert [h.item_id for h in hook_hits] == [str(item_id)]
     h_idx.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_persists_claims(ingester, fake_llm):
+    """LLM-emitted claims should land as ~/brain/claims/<id>.md files
+    cited back to the source item."""
+    from m3.brain.claims import claims_for_item
+
+    item_id = uuid.UUID("cccccccc-1111-2222-3333-444444444444")
+    fake_llm.set_response("Pilot Path proposition", {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x",
+                           "when": {"iso": "2026-04-19", "source": "ingest_time"},
+                           "confidence": 0.9},
+        "open_questions": [], "hooks": {},
+        "self_updates": [], "entity_updates": [],
+        "claims": [
+            {"proposition": "Pilot Path is the priority initiative for Q2.",
+             "confidence": 0.9, "supporting_span": "Pilot Path is the priority",
+             "entity_names": ["Pilot Path"]},
+            {"proposition": "Manoj believes the timeline is achievable.",
+             "confidence": 0.7, "supporting_span": "I think we can hit it",
+             "entity_names": []},
+        ],
+    })
+    await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text",
+        text="Pilot Path proposition: priority initiative for Q2. I think we can hit it.",
+    ))
+
+    persisted = claims_for_item(ingester.brain_root, item_id)
+    assert len(persisted) == 2
+    propositions = {c.proposition for c in persisted}
+    assert "Pilot Path is the priority initiative for Q2." in propositions
+    # Slug mapping happened
+    pilot_path_claim = next(c for c in persisted if "Pilot Path" in c.proposition)
+    assert "pilot-path" in pilot_path_claim.entity_slugs
+
+
+@pytest.mark.asyncio
+async def test_reprocess_replaces_stale_claims(ingester, fake_llm):
+    """Reprocessing the same item must wipe its old claims so we don't
+    pile new propositions on top of stale ones."""
+    from m3.brain.claims import claims_for_item
+
+    item_id = uuid.UUID("cccccccc-5555-6666-7777-888888888888")
+    fake_llm.set_response("first run", {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x",
+                           "when": {"iso": "2026-04-19", "source": "ingest_time"},
+                           "confidence": 0.9},
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+        "claims": [
+            {"proposition": "Old claim A.", "supporting_span": "old", "entity_names": []},
+            {"proposition": "Old claim B.", "supporting_span": "old", "entity_names": []},
+        ],
+    })
+    await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text", text="first run text",
+    ))
+    assert len(claims_for_item(ingester.brain_root, item_id)) == 2
+
+    fake_llm.set_response("second run", {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x",
+                           "when": {"iso": "2026-04-19", "source": "ingest_time"},
+                           "confidence": 0.9},
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+        "claims": [
+            {"proposition": "Fresh claim only.", "supporting_span": "fresh", "entity_names": []},
+        ],
+    })
+    await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text", text="second run text",
+    ))
+    fresh = claims_for_item(ingester.brain_root, item_id)
+    assert len(fresh) == 1
+    assert fresh[0].proposition == "Fresh claim only."
+
+
+@pytest.mark.asyncio
+async def test_ingest_triggers_synthesis_when_entity_crosses_threshold(ingester, fake_llm):
+    """Closing the wiring: an item that emits enough claims about a single
+    entity should auto-trigger the synthesis pass during ingest."""
+    from m3.brain.synthesis import read_synthesis
+
+    item_id = uuid.UUID("eeee0000-0000-0000-0000-eeeeeeeeeeee")
+    fake_llm.set_response("synthesis trigger fixture", {
+        "kind": "personal",
+        "interpretation": {"what_happened": "x",
+                           "when": {"iso": "2026-04-19", "source": "ingest_time"},
+                           "confidence": 0.9},
+        "open_questions": [], "hooks": {}, "self_updates": [], "entity_updates": [],
+        "claims": [
+            {"proposition": "M3 stores everything as markdown.",
+             "supporting_span": "markdown", "entity_names": ["M3"]},
+            {"proposition": "M3 is local-first by design.",
+             "supporting_span": "local-first", "entity_names": ["M3"]},
+            {"proposition": "M3 avoids cloud dependencies.",
+             "supporting_span": "no cloud", "entity_names": ["M3"]},
+        ],
+    })
+    # Synthesis tool gets a separate canned response. FakeLLM key-matches
+    # against the user message; the synthesizer prompt label uses the entity
+    # slug ("m3") because no entity dossier was seeded for this item.
+    fake_llm.set_response("Claims about m3", {
+        "summary": "M3 is a local-first markdown-native personal knowledge OS.",
+        "tensions": [],
+    })
+
+    await ingester.ingest(IngestInput(
+        item_id=item_id, source="cli", original_bytes=None, original_filename=None,
+        content_type="text",
+        text="synthesis trigger fixture: M3 is local-first markdown OS",
+    ))
+
+    synth = read_synthesis(ingester.brain_root, "m3")
+    assert synth is not None
+    assert "local-first" in synth.summary

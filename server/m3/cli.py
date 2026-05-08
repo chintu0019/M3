@@ -325,6 +325,50 @@ def reprocess(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def synthesize(
+    entity: str = typer.Option(None, "--entity", help="Entity slug to synthesize. Omit for stale-only batch pass."),
+    brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+    force: bool = typer.Option(False, "--force", help="Regenerate even if up-to-date."),
+    limit: int = typer.Option(None, "--limit", help="Cap entities synthesized in batch mode."),
+):
+    """Roll up an entity's claims into a synthesized note.
+
+    With `--entity`, synthesize that one entity (regenerating if stale or
+    `--force`). Without it, sweep every entity whose synthesis is missing or
+    stale and regenerate the lot.
+    """
+    import asyncio as _asyncio
+
+    from m3.core.synthesize import synthesize_entity, synthesize_stale
+
+    brain_root = brain or _default_brain()
+    if not (brain_root / "self.md").exists():
+        typer.echo(f"brain at {brain_root} is not initialized", err=True)
+        raise typer.Exit(code=1)
+
+    llm = _make_llm()
+
+    if entity:
+        result = _asyncio.run(synthesize_entity(
+            brain_root=brain_root, entity_slug=entity, llm=llm, force=force,
+        ))
+        if result.written:
+            typer.echo(f"synthesized {entity}")
+        else:
+            typer.echo(f"skipped {entity}: {result.skipped_reason}")
+        return
+
+    results = _asyncio.run(synthesize_stale(
+        brain_root=brain_root, llm=llm, limit=limit,
+    ))
+    written = sum(1 for r in results if r.written)
+    typer.echo(f"synthesized {written} / {len(results)} stale entities")
+    for r in results:
+        if not r.written:
+            typer.echo(f"  skipped {r.entity_slug}: {r.skipped_reason}")
+
+
 telegram_app = typer.Typer(
     help="Telegram capture — ingest messages from a personal bot.",
     invoke_without_command=True,

@@ -44,6 +44,7 @@ type DisplayNode = {
   isEgo: boolean;
   excerpt: string | null;
   itemId: string | null;
+  sources?: number;
 };
 
 const SUGGESTIONS = [
@@ -96,6 +97,12 @@ export default function Canvas() {
   // (the auto-title pass writes async on the server, so we delay slightly).
   const [chatsRefreshKey, setChatsRefreshKey] = useState(0);
 
+  // Sources view: items (raw uploaded files) are hidden by default so the
+  // canvas reads as concept-first. Click an entity to expand its sources, or
+  // flip the toolbar toggle to show every item globally.
+  const [showAllSources, setShowAllSources] = useState(false);
+  const [expandedEntities, setExpandedEntities] = useState<Set<string>>(new Set());
+
   const cameraRef = useRef({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number | null>(null);
@@ -119,28 +126,77 @@ export default function Canvas() {
   }, [settingsOpen]);
 
   // Derive display nodes/edges from the cluster response. Memoized so we don't
-  // rebuild the layout every render — only when the cluster identity changes.
+  // rebuild the layout every render — only when the cluster identity or the
+  // sources-visibility state changes.
+  //
+  // Items (raw uploaded files) are demoted: they're rendered only when the
+  // user opts into the global "Sources" toggle, or when they hook into an
+  // entity the user has explicitly expanded by clicking. Each entity carries
+  // a `sources` count so the renderer can show a badge.
   const display = useMemo(() => {
     if (!cluster) {
       return { nodes: [] as DisplayNode[], links: [] as GraphLink[] };
     }
-    const nodes: DisplayNode[] = cluster.nodes.map(n => ({
-      id: n.id,
-      label: n.label || n.id,
-      cat: deriveCategory({ type: n.type as "query" | "item" | "entity", entity_type: n.entity_type, kind: n.kind }),
-      isEgo: n.type === "query",
-      excerpt: n.excerpt,
-      itemId: n.item_id,
-    }));
-    const links: GraphLink[] = cluster.edges.map(e => ({
-      s: e.source,
-      t: e.target,
-      kind: (["matched", "hooks", "related"] as const).includes(e.kind as LinkKind)
-        ? (e.kind as LinkKind)
-        : "related",
-    }));
+
+    // Map every item-id this cluster knows about to the entities it hooks into,
+    // so we can (a) count sources per entity and (b) reveal items when their
+    // entity is expanded.
+    const sourcesByEntity = new Map<string, number>();
+    const itemsByEntity = new Map<string, Set<string>>();
+    for (const e of cluster.edges) {
+      if (e.kind !== "hooks") continue;
+      if (!e.source.startsWith("item:") || !e.target.startsWith("entity:")) continue;
+      sourcesByEntity.set(e.target, (sourcesByEntity.get(e.target) ?? 0) + 1);
+      let bucket = itemsByEntity.get(e.target);
+      if (!bucket) { bucket = new Set(); itemsByEntity.set(e.target, bucket); }
+      bucket.add(e.source);
+    }
+
+    const visibleItemIds = new Set<string>();
+    if (showAllSources) {
+      for (const n of cluster.nodes) if (n.type === "item") visibleItemIds.add(n.id);
+    } else {
+      for (const entityId of expandedEntities) {
+        const items = itemsByEntity.get(entityId);
+        if (items) for (const id of items) visibleItemIds.add(id);
+      }
+    }
+
+    // Claim nodes can balloon: 8 claims/item × 50 items = 400 nodes, before
+    // entities. Default-hide low-confidence claims so the at-rest canvas stays
+    // readable; users with denser brains can dial the threshold down later.
+    const CLAIM_CONFIDENCE_THRESHOLD = 0.7;
+
+    const nodes: DisplayNode[] = [];
+    for (const n of cluster.nodes) {
+      if (n.type === "item" && !visibleItemIds.has(n.id)) continue;
+      if (n.type === "claim" && (n.confidence ?? 1) < CLAIM_CONFIDENCE_THRESHOLD) continue;
+      nodes.push({
+        id: n.id,
+        label: n.label || n.id,
+        cat: deriveCategory({ type: n.type as "query" | "item" | "entity" | "claim" | "synthesis", entity_type: n.entity_type, kind: n.kind }),
+        isEgo: n.type === "query",
+        excerpt: n.excerpt,
+        itemId: n.item_id,
+        sources: n.type === "entity" ? sourcesByEntity.get(n.id) : undefined,
+      });
+    }
+
+    const visibleIds = new Set(nodes.map(n => n.id));
+    const links: GraphLink[] = [];
+    for (const e of cluster.edges) {
+      if (!visibleIds.has(e.source) || !visibleIds.has(e.target)) continue;
+      links.push({
+        s: e.source,
+        t: e.target,
+        kind: (["matched", "hooks", "related", "evidence", "synthesizes"] as const).includes(e.kind as LinkKind)
+          ? (e.kind as LinkKind)
+          : "related",
+      });
+    }
+
     return { nodes, links };
-  }, [cluster]);
+  }, [cluster, showAllSources, expandedEntities]);
 
   const layout = useMemo<Layout>(() => {
     const nodes: LayoutNode[] = display.nodes.map(n => ({ id: n.id, cat: n.cat }));
@@ -249,6 +305,23 @@ export default function Canvas() {
     setPulseId(id);
     window.setTimeout(() => setPulseId(p => (p === id ? null : p)), 1400);
   }
+
+  // Click handler that doubles as source-expansion for entity nodes: clicking
+  // an entity toggles whether its source items are revealed in the graph.
+  // Items and the query node just focus.
+  const onCanvasNodeClick = useCallback((id: string) => {
+    if (id.startsWith("entity:")) {
+      setExpandedEntities(curr => {
+        const next = new Set(curr);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    }
+    focusNode(id);
+    // focusNode is stable enough — depending on layout/viewSize would re-bind on every frame
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, viewSize.w, viewSize.h]);
 
   // Pre-highlight: substring-match cluster node labels against the typed text.
   // Cheap, runs on every keystroke; nodes get a dashed ring on the canvas.
@@ -400,7 +473,7 @@ export default function Canvas() {
           flowEdges={flowEdges}
           cameraRef={cameraRef}
           onCamera={bumpCam}
-          onNodeClick={focusNode}
+          onNodeClick={onCanvasNodeClick}
           cameraVersion={camVer}
         />
         <Toolbar
@@ -412,6 +485,14 @@ export default function Canvas() {
           onSettings={() => setSettingsOpen(true)}
           onFiles={() => setFilesOpen(true)}
           unconfigured={settings != null && !settings.configured}
+          showAllSources={showAllSources}
+          onToggleSources={() => {
+            setShowAllSources(v => !v);
+            // Toggling the global flag clears per-entity expansions so the
+            // graph stays predictable: either everything is shown or nothing
+            // is shown (until the user clicks an entity).
+            setExpandedEntities(new Set());
+          }}
         />
         <div className="m3-bottom-right">
           <Legend kinds={presentLinkKinds} />

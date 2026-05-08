@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from m3.brain import (
     changelog,
+    claims as claims_mod,
     entity_doc,
     items as items_mod,
     questions,
@@ -392,16 +393,71 @@ class Ingester:
                             summary="graduated from signals (>=3 mentions)",
                         )
 
-            # 5. Open questions
+            # 5. Claims (atomic propositions extracted from this item)
+            #
+            # Persisted as their own files so the canvas can surface them as
+            # first-class nodes alongside entities. On reprocess we wipe stale
+            # claims for the same item first so we don't accumulate ghosts.
+            claims_mod.delete_claims_for_item(self.brain_root, inp.item_id)
+            touched_entity_slugs: set[str] = set()
+            for c in parsed.claims:
+                claim_id = uuid.uuid4()
+                slugs = [entity_doc.slugify(name) for name in (c.entity_names or [])]
+                claims_mod.write_claim(self.brain_root, claims_mod.ClaimMeta(
+                    id=claim_id, item_id=inp.item_id,
+                    proposition=c.proposition,
+                    confidence=c.confidence,
+                    supporting_span=c.supporting_span,
+                    entity_slugs=slugs,
+                    created_at=now_iso,
+                ))
+                touched_entity_slugs.update(slugs)
+
+            # 5b. Synthesis: for any entity whose claim set just changed, ask
+            # whether the synthesis is now stale and regenerate if so. Capped
+            # per ingest so a noisy item with many entities doesn't burn LLM
+            # budget. Failures are logged and swallowed: a flaky synthesis
+            # call must not roll back the item itself.
+            if touched_entity_slugs:
+                from m3.core.synthesize import (
+                    DEFAULT_DELTA_THRESHOLD,
+                    synthesize_entity,
+                )
+                from m3.brain.synthesis import is_stale, read_synthesis
+                ingest_synthesis_cap = 3
+                synth_done = 0
+                for slug in sorted(touched_entity_slugs):
+                    if synth_done >= ingest_synthesis_cap:
+                        break
+                    claim_ids_for_slug = {
+                        c.id for c in claims_mod.iter_claims(self.brain_root)
+                        if slug in c.entity_slugs
+                    }
+                    existing = read_synthesis(self.brain_root, slug)
+                    needs = (
+                        existing is None
+                        or is_stale(existing, claim_ids_for_slug, delta_threshold=DEFAULT_DELTA_THRESHOLD)
+                    )
+                    if not needs:
+                        continue
+                    try:
+                        await synthesize_entity(
+                            brain_root=self.brain_root, entity_slug=slug, llm=self.llm,
+                        )
+                        synth_done += 1
+                    except Exception:
+                        logger.exception("synthesize %s: skipped due to error", slug)
+
+            # 6. Open questions
             for oq in parsed.open_questions:
                 questions.append(self.brain_root, questions.OpenQuestion(
                     item_id=inp.item_id, question=oq.question, context_snippet=oq.context_snippet,
                 ), created_date=today)
 
-            # 6. Vector index upserts
+            # 7. Vector index upserts
             await self._index_item(inp.item_id, inp.text, parsed, entities_touched)
 
-            # 7. Commit
+            # 8. Commit
             if extraction_error is not None:
                 snippet = (inp.text or "").strip()[:50]
                 summary = f"[extraction failed] {snippet}" if snippet else "[extraction failed]"

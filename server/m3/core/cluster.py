@@ -10,13 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from m3.brain.claims import claims_for_item, iter_claims
 from m3.brain.entity_doc import load as load_entity
 from m3.brain.entity_doc import slugify
 from m3.brain.items import read_meta
+from m3.brain.synthesis import iter_syntheses, read_synthesis
 from m3.core.retrieve import Retriever
 
 
-NodeType = Literal["query", "item", "entity"]
+NodeType = Literal["query", "item", "entity", "claim", "synthesis"]
 
 
 class _Embedder(Protocol):
@@ -36,13 +38,16 @@ class ClusterNode:
     # Stable identifiers downstream consumers (chat highlighting) can match against.
     item_id: str | None = None
     entity_slug: str | None = None
+    claim_id: str | None = None            # for claim nodes
+    confidence: float | None = None        # for claim nodes
+    synthesis_id: str | None = None        # for synthesis nodes
 
 
 @dataclass
 class ClusterEdge:
     source: str                            # node id
     target: str                            # node id
-    kind: Literal["matched", "hooks", "related"]
+    kind: Literal["matched", "hooks", "related", "evidence", "synthesizes"]
 
 
 @dataclass
@@ -82,6 +87,38 @@ async def build_cluster(
             excerpt=h.excerpt or h.snippet or "", item_id=h.item_id,
         ))
         graph.edges.append(ClusterEdge(source="query", target=item_node_id, kind="matched"))
+
+        # Expand the item into its persisted claims so the canvas can lead with
+        # propositions instead of raw text.
+        try:
+            item_uuid = _uuid.UUID(h.item_id)
+        except (ValueError, TypeError):
+            item_uuid = None
+        if item_uuid is not None:
+            for claim in claims_for_item(brain_root, item_uuid):
+                claim_node_id = f"claim:{claim.id}"
+                _add(ClusterNode(
+                    id=claim_node_id, type="claim",
+                    label=claim.proposition[:80],
+                    excerpt=claim.proposition,
+                    claim_id=str(claim.id), confidence=claim.confidence,
+                ))
+                graph.edges.append(ClusterEdge(
+                    source=item_node_id, target=claim_node_id, kind="evidence",
+                ))
+                for slug in claim.entity_slugs:
+                    entity_node_id = f"entity:{slug}"
+                    if entity_node_id not in seen_nodes:
+                        doc = load_entity(brain_root, slug=slug)
+                        _add(ClusterNode(
+                            id=entity_node_id, type="entity",
+                            label=doc.canonical_name if doc else slug.replace("-", " "),
+                            entity_type=doc.entity_type if doc else None,
+                            entity_slug=slug,
+                        ))
+                    graph.edges.append(ClusterEdge(
+                        source=claim_node_id, target=entity_node_id, kind="hooks",
+                    ))
 
         # Walk item hooks to add entity nodes
         try:
@@ -129,6 +166,34 @@ async def build_cluster(
                             for e in graph.edges
                         ):
                             graph.edges.append(ClusterEdge(source=a, target=b, kind="related"))
+
+    # For every entity that ended up in the cluster, attach its synthesis (if
+    # one exists) and an `synthesizes` edge from the synthesis to each of its
+    # source claims that are also in the cluster. This is what makes the
+    # canvas read as a wiki: distillations on top, propositions underneath,
+    # raw items hidden by default.
+    for node in list(graph.nodes):
+        if node.type != "entity" or not node.entity_slug:
+            continue
+        synth = read_synthesis(brain_root, node.entity_slug)
+        if synth is None:
+            continue
+        synth_node_id = f"synthesis:{node.entity_slug}"
+        if synth_node_id not in seen_nodes:
+            _add(ClusterNode(
+                id=synth_node_id, type="synthesis",
+                label=synth.summary[:80], excerpt=synth.summary,
+                synthesis_id=str(synth.id), entity_slug=node.entity_slug,
+            ))
+        graph.edges.append(ClusterEdge(
+            source=synth_node_id, target=node.id, kind="hooks",
+        ))
+        for cid in synth.claim_ids:
+            claim_node_id = f"claim:{cid}"
+            if claim_node_id in seen_nodes:
+                graph.edges.append(ClusterEdge(
+                    source=synth_node_id, target=claim_node_id, kind="synthesizes",
+                ))
 
     return graph
 
@@ -214,6 +279,35 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
                     source=f"item:{item_id}", target=entity_node_id, kind="hooks",
                 ))
 
+    # Claims + their evidence (item) and about (entity) edges.
+    for claim in iter_claims(brain_root):
+        claim_node_id = f"claim:{claim.id}"
+        _add(ClusterNode(
+            id=claim_node_id, type="claim",
+            label=claim.proposition[:80],
+            excerpt=claim.proposition,
+            claim_id=str(claim.id), confidence=claim.confidence,
+        ))
+        item_node_id = f"item:{claim.item_id}"
+        if item_node_id in seen:
+            graph.edges.append(ClusterEdge(
+                source=item_node_id, target=claim_node_id, kind="evidence",
+            ))
+        for slug in claim.entity_slugs:
+            entity_node_id = f"entity:{slug}"
+            if entity_node_id not in seen:
+                # Stub the entity even if we don't have a dossier on disk.
+                doc = load_entity(brain_root, slug=slug)
+                _add(ClusterNode(
+                    id=entity_node_id, type="entity",
+                    label=doc.canonical_name if doc else slug.replace("-", " "),
+                    entity_type=doc.entity_type if doc else None,
+                    entity_slug=slug,
+                ))
+            graph.edges.append(ClusterEdge(
+                source=claim_node_id, target=entity_node_id, kind="hooks",
+            ))
+
     # Entity-entity related edges, deduped.
     related_seen: set[tuple[str, str]] = set()
     for node in list(graph.nodes):
@@ -231,5 +325,30 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
                 continue
             related_seen.add((a, b))
             graph.edges.append(ClusterEdge(source=a, target=b, kind="related"))
+
+    # Syntheses (one per entity at most). Attached to their entity by `hooks`
+    # and to each contributing claim by `synthesizes` so the canvas can
+    # foreground "this distillation, drawn from these atomic claims, is about
+    # this entity."
+    for synth in iter_syntheses(brain_root):
+        entity_node_id = f"entity:{synth.entity_slug}"
+        if entity_node_id not in seen:
+            continue   # orphaned synthesis (shouldn't happen, but skip safely)
+        synth_node_id = f"synthesis:{synth.entity_slug}"
+        if synth_node_id not in seen:
+            _add(ClusterNode(
+                id=synth_node_id, type="synthesis",
+                label=synth.summary[:80], excerpt=synth.summary,
+                synthesis_id=str(synth.id), entity_slug=synth.entity_slug,
+            ))
+        graph.edges.append(ClusterEdge(
+            source=synth_node_id, target=entity_node_id, kind="hooks",
+        ))
+        for cid in synth.claim_ids:
+            claim_node_id = f"claim:{cid}"
+            if claim_node_id in seen:
+                graph.edges.append(ClusterEdge(
+                    source=synth_node_id, target=claim_node_id, kind="synthesizes",
+                ))
 
     return graph

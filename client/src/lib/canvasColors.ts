@@ -6,13 +6,15 @@
 // for both color and the legend grouping.
 
 export type Category =
-  | "self"      // the query node (ego)
+  | "self"        // the query node (ego)
   | "person"
   | "project"
   | "concept"
   | "reading"
   | "decision"
-  | "item"      // raw capture, no resolved entity_type
+  | "synthesis"   // distilled note rolled up from claims about one entity
+  | "claim"       // atomic proposition extracted from items
+  | "item"        // raw capture, no resolved entity_type
   | "other";
 
 export const CATEGORY_HUE: Record<Category, number> = {
@@ -22,6 +24,8 @@ export const CATEGORY_HUE: Record<Category, number> = {
   concept: 150,
   reading: 300,
   decision: 18,
+  synthesis: 280,
+  claim: 40,
   item: 260,
   other: 200,
 };
@@ -33,18 +37,23 @@ export const CATEGORY_LABEL: Record<Category, string> = {
   concept: "Concepts",
   reading: "Reading",
   decision: "Decisions",
+  synthesis: "Syntheses",
+  claim: "Claims",
   item: "Items",
   other: "Other",
 };
 
-export type LinkKind = "matched" | "hooks" | "related";
+export type LinkKind = "matched" | "hooks" | "related" | "evidence" | "synthesizes";
 
-// Hue + dash pattern keyed by edge kind from the cluster API. The design's
-// six link types collapse to three here because that's what the backend emits.
+// Hue + dash pattern keyed by edge kind from the cluster API. Claims use a
+// short-dash "evidence" link to distinguish item→claim edges from the
+// solid item→entity hooks. Syntheses use a long-dash "synthesizes" link.
 export const LINK_STYLE: Record<LinkKind, { hue: number; dash: string | null; label: string }> = {
-  matched: { hue: 220, dash: null,    label: "matched" },
-  hooks:   { hue: 70,  dash: null,    label: "hooks" },
-  related: { hue: 260, dash: "6 4",   label: "related" },
+  matched:     { hue: 220, dash: null,    label: "matched" },
+  hooks:       { hue: 70,  dash: null,    label: "hooks" },
+  related:     { hue: 260, dash: "6 4",   label: "related" },
+  evidence:    { hue: 40,  dash: "2 4",   label: "evidence" },
+  synthesizes: { hue: 280, dash: "10 4",  label: "synthesizes" },
 };
 
 /**
@@ -53,11 +62,13 @@ export const LINK_STYLE: Record<LinkKind, { hue: number; dash: string | null; la
  * normalize here in one place.
  */
 export function deriveCategory(args: {
-  type: "query" | "item" | "entity";
+  type: "query" | "item" | "entity" | "claim" | "synthesis";
   entity_type: string | null;
   kind: string | null;
 }): Category {
   if (args.type === "query") return "self";
+  if (args.type === "synthesis") return "synthesis";
+  if (args.type === "claim") return "claim";
   // Items always get the neutral "item" category. Their `kind` is
   // personal/reference/record/signal — a content-type, not a semantic
   // category, so we don't try to fold it into the person/concept/etc.

@@ -375,6 +375,17 @@ body { overflow: hidden; }
   color: var(--m3-ink);
 }
 
+.m3-toolbar__sources {
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+.m3-toolbar__sources.on {
+  background: var(--m3-surface-2);
+  color: var(--m3-ink);
+}
+
 .m3-toolbar__gear {
   background: var(--m3-surface);
   border: 1px solid var(--m3-line);

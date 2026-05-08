@@ -16,6 +16,9 @@ export interface DisplayNode {
   cat: Category;
   isEgo: boolean;
   facts?: number;
+  // Number of raw source items hooking into this entity. Surfaced as a
+  // small badge so users know depth-of-evidence without rendering each item.
+  sources?: number;
   excerpt?: string | null;
 }
 
@@ -129,6 +132,22 @@ export function NodeMark({
         </>
       )}
 
+      {!node.isEgo && node.sources != null && node.sources > 0 && (
+        <g transform={`translate(${radius * 0.85}, ${-radius * 0.85})`} style={{ pointerEvents: "none" }}>
+          <circle r={9} fill="oklch(0.18 0.012 260)" stroke={color} strokeWidth={1} />
+          <text
+            textAnchor="middle"
+            y={3.5}
+            fill={color}
+            fontFamily="'JetBrains Mono', monospace"
+            fontSize="9.5"
+            fontWeight={600}
+          >
+            {node.sources > 99 ? "99+" : node.sources}
+          </text>
+        </g>
+      )}
+
       {showLabel && !showCard && !node.isEgo && (
         <g transform={`translate(0, ${radius + 14})`} style={{ pointerEvents: "none" }}>
           <text
@@ -166,6 +185,7 @@ export function NodeMark({
             style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
           >
             {node.cat}
+            {node.sources ? ` · ${node.sources} ${node.sources === 1 ? "source" : "sources"}` : ""}
             {node.facts ? ` · ${node.facts} facts` : ""}
           </text>
           {node.excerpt && (

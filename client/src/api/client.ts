@@ -166,7 +166,7 @@ export interface ChatSessionTurn {
 
 export interface ClusterNode {
   id: string;
-  type: "query" | "item" | "entity";
+  type: "query" | "item" | "entity" | "claim" | "synthesis";
   label: string;
   score: number;
   kind: string | null;
@@ -175,12 +175,15 @@ export interface ClusterNode {
   excerpt: string | null;
   item_id: string | null;
   entity_slug: string | null;
+  claim_id?: string | null;
+  confidence?: number | null;
+  synthesis_id?: string | null;
 }
 
 export interface ClusterEdge {
   source: string;
   target: string;
-  kind: "matched" | "hooks" | "related";
+  kind: "matched" | "hooks" | "related" | "evidence" | "synthesizes";
 }
 
 export interface ClusterResponse {

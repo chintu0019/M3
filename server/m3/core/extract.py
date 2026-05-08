@@ -201,6 +201,30 @@ class EntityUpdate(BaseModel):
         return value
 
 
+class ClaimOut(BaseModel):
+    """One atomic, decontextualized proposition extracted from an item.
+
+    Each claim is meant to stand alone as a single sentence ("M3 is local-first
+    by design", "Aditya is leaning into the Pilot Path partnership"). Claims
+    become first-class nodes on the canvas, linking the items they were
+    extracted from to the entities they're about — the concept-substrate the
+    user actually navigates by.
+    """
+    proposition: str = Field(min_length=4, max_length=400)
+    confidence: float = Field(ge=0.0, le=1.0, default=0.7)
+    supporting_span: str = Field(default="", max_length=400)
+    entity_names: list[str] = Field(default_factory=list, max_length=6)
+
+    @field_validator("entity_names", mode="before")
+    @classmethod
+    def _coerce_entity_list(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_coerce_name_or_string(v) for v in value]
+        if isinstance(value, dict):
+            return [_coerce_name_or_string(value)]
+        return value
+
+
 class StructuredFields(BaseModel):
     # All fields optional: the LLM may classify something as a record but only pull
     # a subset of the structured fields. ingest.py guards the records.write_record
@@ -236,6 +260,7 @@ class ExtractionOutput(BaseModel):
     hooks: Hooks = Field(default_factory=Hooks)
     self_updates: list[SelfUpdate] = Field(default_factory=list)
     entity_updates: list[EntityUpdate] = Field(default_factory=list)
+    claims: list[ClaimOut] = Field(default_factory=list)
     structured_fields: StructuredFields | None = None
     signal: SignalBlock | None = None
 
@@ -301,6 +326,14 @@ Correct process_item output (abridged):
      "section_update": {"operation": "append", "section_heading": null,
        "new_content": "## Your history\\n\\n- <today>: coffee; leaning into Pilot Path partnership.",
        "change_summary": "coffee catch-up"}}
+  ],
+  "claims": [
+    {"proposition": "Aditya is leaning into the Pilot Path partnership conversation.",
+     "confidence": 0.9, "supporting_span": "leaning into the Pilot Path partnership conversation",
+     "entity_names": ["Aditya", "Pilot Path"]},
+    {"proposition": "Manoj met Aditya for coffee and plans to follow up next week.",
+     "confidence": 0.85, "supporting_span": "Had coffee with Aditya today.",
+     "entity_names": ["Aditya"]}
   ]
 }
 
@@ -404,6 +437,11 @@ Correct process_item output (abridged):
        "new_content": "## Why saved\\n\\nRefresher on internals before the Pacific project kickoff.",
        "change_summary": "saved as reference"},
      "related_entity_names": ["Pacific"]}
+  ],
+  "claims": [
+    {"proposition": "The transformer architecture relies entirely on attention mechanisms.",
+     "confidence": 0.85, "supporting_span": "great refresher on transformer internals",
+     "entity_names": ["Transformers", "attention mechanisms"]}
   ]
 }
 
@@ -503,6 +541,29 @@ Route every item into one of four kinds:
 - reference: articles / papers / books the user saved (neutral summary + user's perspective)
 - record: receipts / bills / tickets (structured fields; no narrative page)
 - signal: news / tweets / random interesting links (one-line takeaway; no entity page)
+
+# Claims
+
+Emit `claims`: an array of 0–8 atomic, decontextualized propositions present
+in the item. A claim is a single sentence that would still make sense out of
+context, naming any entity by its canonical name (not "he"/"this"/"the project").
+Claims are how the user navigates their brain — they appear as first-class
+nodes on the canvas, NOT the raw item text.
+
+Rules for claims:
+- Atomic: one proposition per claim, not a paragraph.
+- Decontextualized: pronouns and deixis fully resolved.
+- Grounded: only emit a claim if a `supporting_span` quote (≤300 chars) from
+  the item content actually supports it. Do not invent claims the item doesn't
+  contain. If the item is a receipt, signal, or otherwise content-thin, emit
+  zero claims — better empty than fabricated.
+- Linked: list the canonical names of entities each claim is about under
+  `entity_names` (≤6). Use the SAME canonical name you use elsewhere.
+- Confidence: 0.5 for plausible-but-implicit, 0.8 for explicit, 0.95 for
+  verbatim. Never above 0.95.
+
+Records and signals usually emit 0 claims. Personal and reference items
+typically emit 1–4.
 
 # Self slot routing (pick the slot that fits the content's PRIMARY subject)
 
