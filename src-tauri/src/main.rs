@@ -239,18 +239,25 @@ fn create_venv(python: &Path, venv: &Path) -> Result<(), String> {
     .map_err(|e| format!("python -m venv failed: {e}"))
 }
 
-fn install_wheel(venv: &Path, wheel: &Path) -> Result<(), String> {
+fn install_wheel(venv: &Path, wheel: &Path, with_deps: bool) -> Result<(), String> {
     let pip = venv_bin(venv, "pip");
     // --force-reinstall replaces the installed copy even when the wheel's
     // version string hasn't changed (common during development and for
-    // auto-update bundles that rebuild without a version bump). --no-deps
-    // keeps it fast: the dep set rarely changes between m3 builds, and a
-    // fresh full resolve here would add 30+ seconds to every reconcile.
-    run_capturing(
-        Command::new(&pip)
-            .args(["install", "--force-reinstall", "--no-deps", "--quiet", wheel.to_str().unwrap()]),
-    )
-    .map_err(|e| format!("pip install failed: {e}"))
+    // auto-update bundles that rebuild without a version bump).
+    //
+    // On a freshly-created venv we *must* resolve dependencies — typer,
+    // fastapi, anthropic, etc. — or the m3 entry point dies with
+    // ModuleNotFoundError on first launch. On subsequent reconciles the
+    // dep set rarely changes, so we skip the resolve to keep launches
+    // snappy (otherwise pip would re-check the whole tree, +30s).
+    let mut args: Vec<&str> = vec!["install", "--force-reinstall", "--quiet"];
+    if !with_deps {
+        args.push("--no-deps");
+    }
+    let wheel_str = wheel.to_str().unwrap();
+    args.push(wheel_str);
+    run_capturing(Command::new(&pip).args(&args))
+        .map_err(|e| format!("pip install failed: {e}"))
 }
 
 /// Reconcile the user-data venv with the bundled wheel and return the path
@@ -307,6 +314,7 @@ fn ensure_m3_runtime<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, S
         std::fs::remove_dir_all(&venv_dir).map_err(|e| e.to_string())?;
     }
 
+    let venv_was_recreated = !venv_is_usable;
     if !venv_is_usable {
         let python = find_system_python().ok_or_else(|| {
             "Python 3.12 or newer was not found on this system. M3 needs Python \
@@ -317,7 +325,7 @@ fn ensure_m3_runtime<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, S
         create_venv(&python, &venv_dir)?;
     }
 
-    install_wheel(&venv_dir, &wheel)?;
+    install_wheel(&venv_dir, &wheel, venv_was_recreated)?;
     std::fs::write(&marker, &fingerprint).map_err(|e| e.to_string())?;
     Ok(m3_bin)
 }
