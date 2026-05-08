@@ -127,9 +127,11 @@ export function ChatRail({
   async function reset() {
     cancelRef.current.cancelled = true;
     setTurns([]);
+    setInput("");
     setStreaming(false);
     setCurrentStep(null);
-    onSessionChange(null); // parent will mint a fresh session lazily on next send
+    if (sessionId !== null) onSessionChange(null);
+    inputRef.current?.focus();
     onReset();
   }
 
