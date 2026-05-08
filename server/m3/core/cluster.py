@@ -211,6 +211,10 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
     Used as the canvas's "show me my whole brain" view — the chat then
     highlights subsets of this graph as citations stream in.
 
+    A self/"you" ego node is emitted at the center so the layout has a stable
+    anchor; it carries no edges of its own — its presence alone is enough for
+    the force layout to pin it center and orbit everything else around it.
+
     Edges:
       - item ➜ entity   ("hooks")    — each item's resolved entity_updates
       - entity ➜ entity ("related")  — undirected, deduped, from entity.related
@@ -226,6 +230,11 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
             return
         seen.add(node.id)
         graph.nodes.append(node)
+
+    # Ego: a single "self" node anchors the canvas at center. Carries no
+    # edges (would saturate fan-out into entities); the force layout pins
+    # it on cat=="self" and orbits everything else around it.
+    _add(ClusterNode(id="self", type="query", label="You"))
 
     # Entities first so item->entity edges resolve cleanly.
     if paths.entities_dir.is_dir():

@@ -16,9 +16,10 @@
 // EntityDetail, ItemDetail, Questions, Settings).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type ClusterResponse, type LLMSettings } from "../api/client";
+import { api, type ClusterNode, type ClusterResponse, type LLMSettings } from "../api/client";
 import { ChatHistorySidebar } from "../components/canvas/ChatHistorySidebar";
 import { ChatRail, type CitedRef } from "../components/canvas/ChatRail";
+import { DetailPanel } from "../components/canvas/DetailPanel";
 import { FilesModal } from "../components/canvas/files/FilesModal";
 import { Graph, type GraphLink } from "../components/canvas/Graph";
 import { Legend } from "../components/canvas/Legend";
@@ -106,11 +107,18 @@ export default function Canvas() {
     setNewChatNonce(n => n + 1);
   }, []);
 
-  // Sources view: items (raw uploaded files) are hidden by default so the
-  // canvas reads as concept-first. Click an entity to expand its sources, or
-  // flip the toolbar toggle to show every item globally.
+  // Layered visibility. The default canvas is You + entities + their
+  // syntheses — clean and readable. Claims and items are hidden by default;
+  // they're either revealed globally via the toolbar toggles, or per-entity
+  // by clicking an entity to expand it.
   const [showAllSources, setShowAllSources] = useState(false);
+  const [showAllClaims, setShowAllClaims] = useState(false);
   const [expandedEntities, setExpandedEntities] = useState<Set<string>>(new Set());
+
+  // Focus mode: clicking a node opens the detail panel and dims everything
+  // that isn't the focused node or one of its 1-hop neighbors. Click the
+  // canvas background or hit Esc to clear.
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
 
   const cameraRef = useRef({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -147,21 +155,30 @@ export default function Canvas() {
       return { nodes: [] as DisplayNode[], links: [] as GraphLink[] };
     }
 
-    // Map every item-id this cluster knows about to the entities it hooks into,
-    // so we can (a) count sources per entity and (b) reveal items when their
-    // entity is expanded.
+    // Map item->entity and claim->entity hooks so we can:
+    //   (a) count sources/claims per entity for badges
+    //   (b) reveal a node only when its entity has been expanded
     const sourcesByEntity = new Map<string, number>();
+    const claimsByEntity = new Map<string, number>();
     const itemsByEntity = new Map<string, Set<string>>();
+    const claimsByEntityIds = new Map<string, Set<string>>();
     for (const e of cluster.edges) {
       if (e.kind !== "hooks") continue;
-      if (!e.source.startsWith("item:") || !e.target.startsWith("entity:")) continue;
-      sourcesByEntity.set(e.target, (sourcesByEntity.get(e.target) ?? 0) + 1);
-      let bucket = itemsByEntity.get(e.target);
-      if (!bucket) { bucket = new Set(); itemsByEntity.set(e.target, bucket); }
-      bucket.add(e.source);
+      if (e.source.startsWith("item:") && e.target.startsWith("entity:")) {
+        sourcesByEntity.set(e.target, (sourcesByEntity.get(e.target) ?? 0) + 1);
+        let bucket = itemsByEntity.get(e.target);
+        if (!bucket) { bucket = new Set(); itemsByEntity.set(e.target, bucket); }
+        bucket.add(e.source);
+      } else if (e.source.startsWith("claim:") && e.target.startsWith("entity:")) {
+        claimsByEntity.set(e.target, (claimsByEntity.get(e.target) ?? 0) + 1);
+        let bucket = claimsByEntityIds.get(e.target);
+        if (!bucket) { bucket = new Set(); claimsByEntityIds.set(e.target, bucket); }
+        bucket.add(e.source);
+      }
     }
 
     const visibleItemIds = new Set<string>();
+    const visibleClaimIds = new Set<string>();
     if (showAllSources) {
       for (const n of cluster.nodes) if (n.type === "item") visibleItemIds.add(n.id);
     } else {
@@ -170,16 +187,19 @@ export default function Canvas() {
         if (items) for (const id of items) visibleItemIds.add(id);
       }
     }
-
-    // Claim nodes can balloon: 8 claims/item × 50 items = 400 nodes, before
-    // entities. Default-hide low-confidence claims so the at-rest canvas stays
-    // readable; users with denser brains can dial the threshold down later.
-    const CLAIM_CONFIDENCE_THRESHOLD = 0.7;
+    if (showAllClaims) {
+      for (const n of cluster.nodes) if (n.type === "claim") visibleClaimIds.add(n.id);
+    } else {
+      for (const entityId of expandedEntities) {
+        const cls = claimsByEntityIds.get(entityId);
+        if (cls) for (const id of cls) visibleClaimIds.add(id);
+      }
+    }
 
     const nodes: DisplayNode[] = [];
     for (const n of cluster.nodes) {
       if (n.type === "item" && !visibleItemIds.has(n.id)) continue;
-      if (n.type === "claim" && (n.confidence ?? 1) < CLAIM_CONFIDENCE_THRESHOLD) continue;
+      if (n.type === "claim" && !visibleClaimIds.has(n.id)) continue;
       nodes.push({
         id: n.id,
         label: n.label || n.id,
@@ -205,7 +225,7 @@ export default function Canvas() {
     }
 
     return { nodes, links };
-  }, [cluster, showAllSources, expandedEntities]);
+  }, [cluster, showAllSources, showAllClaims, expandedEntities]);
 
   const layout = useMemo<Layout>(() => {
     const nodes: LayoutNode[] = display.nodes.map(n => ({ id: n.id, cat: n.cat }));
@@ -240,12 +260,31 @@ export default function Canvas() {
     return () => cancelAnimationFrame(raf);
   }, [layout]);
 
-  // Initial fit when layout + viewport are ready.
+  // Initial fit when layout + viewport are ready. Centred on the ego (You),
+  // not on the bounding-box midpoint — otherwise an asymmetric set of nodes
+  // pulls the focal point off-centre and the user's "I am the centre" gets
+  // visually relocated to a corner.
   useEffect(() => {
     if (viewSize.w < 10 || layout.state.length === 0) return;
-    fitTo(layout.state.map(s => s.id));
-    // We deliberately do NOT depend on `layout` here — only fit on first
-    // viewSize-becomes-known per layout instance. Subsequent fits are caller-driven.
+    const ego = layout.state.find(s => s.pinned);
+    let extentR = 0;
+    if (ego) {
+      for (const s of layout.state) {
+        const d = Math.hypot(s.x - ego.x, s.y - ego.y);
+        if (d > extentR) extentR = d;
+      }
+    }
+    const pad = 140;
+    if (ego && extentR > 0) {
+      const span = (extentR + pad) * 2;
+      const k = Math.min(viewSize.w / span, viewSize.h / span, 1.4);
+      animateCamera(
+        { x: viewSize.w / 2 - ego.x * k, y: viewSize.h / 2 - ego.y * k, k },
+        500,
+      );
+    } else {
+      fitTo(layout.state.map(s => s.id));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewSize.w, layout]);
 
@@ -317,7 +356,8 @@ export default function Canvas() {
 
   // Click handler that doubles as source-expansion for entity nodes: clicking
   // an entity toggles whether its source items are revealed in the graph.
-  // Items and the query node just focus.
+  // Every click also opens the detail panel and dims non-neighbors so the
+  // user can actually follow connections from the focused node.
   const onCanvasNodeClick = useCallback((id: string) => {
     if (id.startsWith("entity:")) {
       setExpandedEntities(curr => {
@@ -327,10 +367,76 @@ export default function Canvas() {
         return next;
       });
     }
+    setFocusedNodeId(id);
+    // Compute the 1-hop neighborhood and write it into `highlighted`. The
+    // existing render path uses `dim = !highlighted.has(id)` to fade the rest.
+    const ring = new Set<string>([id]);
+    for (const e of display.links) {
+      if (e.s === id) ring.add(e.t);
+      else if (e.t === id) ring.add(e.s);
+    }
+    setHighlighted(ring);
     focusNode(id);
     // focusNode is stable enough — depending on layout/viewSize would re-bind on every frame
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, viewSize.w, viewSize.h, display.links]);
+
+  const clearFocus = useCallback(() => {
+    setFocusedNodeId(null);
+    setHighlighted(new Set());
+    setExpandedEntities(new Set());
+    // Recenter the camera on You. The focus animation moves the camera off
+    // ego when the user explores; clearing focus should put them back.
+    const ego = layout.state.find(s => s.pinned);
+    if (ego && viewSize.w >= 10) {
+      let extentR = 0;
+      for (const s of layout.state) {
+        const d = Math.hypot(s.x - ego.x, s.y - ego.y);
+        if (d > extentR) extentR = d;
+      }
+      const span = (extentR + 140) * 2;
+      const k = Math.min(viewSize.w / span, viewSize.h / span, 1.4);
+      animateCamera(
+        { x: viewSize.w / 2 - ego.x * k, y: viewSize.h / 2 - ego.y * k, k },
+        500,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, viewSize.w, viewSize.h]);
+
+  // Esc clears focus. Cheap key listener; lives on window so it works no
+  // matter where the user clicked last.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") clearFocus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clearFocus]);
+
+  const focusedNode = useMemo(() => {
+    if (!focusedNodeId || !cluster) return null;
+    return cluster.nodes.find(n => n.id === focusedNodeId) ?? null;
+  }, [focusedNodeId, cluster]);
+
+  const focusedNeighbors = useMemo(() => {
+    if (!focusedNodeId || !cluster) return [];
+    const out: { node: ClusterNode; relation: string }[] = [];
+    const seen = new Set<string>();
+    const byId = new Map(cluster.nodes.map(n => [n.id, n]));
+    for (const e of cluster.edges) {
+      let otherId: string | null = null;
+      let relation = e.kind;
+      if (e.source === focusedNodeId) otherId = e.target;
+      else if (e.target === focusedNodeId) otherId = e.source;
+      if (!otherId || seen.has(otherId)) continue;
+      const n = byId.get(otherId);
+      if (!n) continue;
+      seen.add(otherId);
+      out.push({ node: n, relation });
+    }
+    return out;
+  }, [focusedNodeId, cluster]);
 
   // Pre-highlight: substring-match cluster node labels against the typed text.
   // Cheap, runs on every keystroke; nodes get a dashed ring on the canvas.
@@ -484,7 +590,14 @@ export default function Canvas() {
           cameraRef={cameraRef}
           onCamera={bumpCam}
           onNodeClick={onCanvasNodeClick}
+          onCanvasClick={clearFocus}
           cameraVersion={camVer}
+        />
+        <DetailPanel
+          node={focusedNode}
+          neighbors={focusedNeighbors}
+          onClose={clearFocus}
+          onJumpTo={onCanvasNodeClick}
         />
         <Toolbar
           variant={variant}
@@ -501,6 +614,11 @@ export default function Canvas() {
             // Toggling the global flag clears per-entity expansions so the
             // graph stays predictable: either everything is shown or nothing
             // is shown (until the user clicks an entity).
+            setExpandedEntities(new Set());
+          }}
+          showAllClaims={showAllClaims}
+          onToggleClaims={() => {
+            setShowAllClaims(v => !v);
             setExpandedEntities(new Set());
           }}
         />

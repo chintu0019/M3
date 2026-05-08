@@ -206,3 +206,16 @@ async def test_build_full_graph_surfaces_synthesis_attached_to_entity(tmp_brain:
     # synthesis -> each contributing claim (synthesizes)
     synthesizes_edges = [e for e in graph.edges if e.kind == "synthesizes"]
     assert len(synthesizes_edges) == 2
+
+
+@pytest.mark.asyncio
+async def test_build_full_graph_emits_self_ego_node(tmp_brain: Path):
+    """The at-rest canvas needs a single anchor — a 'You' node centered on
+    the layout. Every full-graph response carries one regardless of what's
+    in the brain."""
+    from m3.core.cluster import build_full_graph
+    graph = await build_full_graph(brain_root=tmp_brain)
+    egos = [n for n in graph.nodes if n.type == "query"]
+    assert len(egos) == 1
+    assert egos[0].id == "self"
+    assert egos[0].label == "You"

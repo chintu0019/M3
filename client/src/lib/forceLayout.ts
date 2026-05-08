@@ -35,6 +35,11 @@ export interface LayoutState {
   dragging: boolean;
   degree: number;
   angleSlot?: number;
+  /** Deterministic slot the node returns to after a drag release. Computed
+   *  once at init so the radial layout reads as a clean diagram instead of
+   *  the spaghetti the force-directed version produced. */
+  slotX?: number;
+  slotY?: number;
 }
 
 export interface LayoutParams {
@@ -65,6 +70,42 @@ export const DEFAULT_PARAMS: LayoutParams = {
   selfOrbitK: 0.018,
 };
 
+/**
+ * Preferred radius from the ego per node category. Pulls each node onto a
+ * concentric ring around (cx, cy) so the canvas reads as "you at the centre,
+ * synthesised meaning closest, raw evidence furthest." Strong enough to
+ * dominate the soft category attractor — only repulsion between nodes can
+ * push a node noticeably off its ring.
+ */
+const RADIAL_BANDS: Partial<Record<Category, number>> = {
+  self: 0,
+  synthesis: 230,
+  person: 380,
+  project: 380,
+  concept: 380,
+  reading: 380,
+  decision: 380,
+  other: 420,
+  claim: 560,
+  item: 720,
+};
+
+/**
+ * Preferred angular sector per category. Entities of the same kind cluster
+ * angularly (people on the upper-left, projects up, concepts upper-right,
+ * etc) instead of being randomly scattered around the ring. Claims and
+ * items have no angular preference — they spread along their ring driven
+ * only by repulsion + link forces, which keeps neighbors tight.
+ */
+const CATEGORY_ANGLE: Partial<Record<Category, number>> = {
+  person:   Math.PI * 1.25,   // upper-left
+  project:  Math.PI * 1.5,    // top
+  concept:  Math.PI * 1.75,   // upper-right
+  reading:  Math.PI * 0.25,   // lower-right
+  decision: Math.PI * 0.5,    // bottom
+  other:    Math.PI * 0.75,   // lower-left
+};
+
 export interface Layout {
   state: LayoutState[];
   byId: Map<string, LayoutState>;
@@ -89,27 +130,127 @@ export function initLayout(
   const cy = H / 2;
   const egoId = opts.egoId ?? nodes.find(n => n.cat === "self")?.id;
 
-  // Seed positions in a category-banded ring. The angles only matter for
-  // initial settle — physics takes over within 500 steps.
-  const cats = Array.from(new Set(nodes.map(n => n.cat)));
-  const catAngle: Record<string, number> = {};
-  cats.forEach((c, i) => {
-    catAngle[c] = (i / cats.length) * Math.PI * 2;
-  });
+  // ── Radial slotter ──────────────────────────────────────────────────────
+  // Replaces force-directed layout for the at-rest view. Each node gets a
+  // deterministic slot computed in three passes:
+  //   1. Ego at the centre.
+  //   2. Entity nodes on the entity ring, grouped into sectors by type
+  //      (people upper-left, projects up, concepts upper-right, etc).
+  //   3. Synthesis nodes on the synthesis ring, each at the angle of its
+  //      anchor entity. Claim nodes on the claim ring, in a tight arc near
+  //      their target entity. Item nodes on the outermost ring, same logic.
+  //
+  // The result is "petals": every entity has its synthesis directly inside
+  // it and a fan of claims directly outside. Edge lines become short radial
+  // spokes instead of long diagonals.
+  //
+  // Drag still works: while dragging, the node follows the pointer; on
+  // release it springs back to its slot.
+  const angleOf = new Map<string, number>();   // node id -> radial angle around ego
+  const slotXY = new Map<string, { x: number; y: number }>();
 
-  const state: LayoutState[] = nodes.map((n, i) => {
-    const a = catAngle[n.cat] + (i % 5) * 0.15;
-    const r = n.id === egoId ? 0 : 260 + (i % 3) * 60;
+  // Pass 1: ego.
+  if (egoId) slotXY.set(egoId, { x: cx, y: cy });
+
+  // Pass 2: entity nodes by sector. Other-typed entities (no sector) spread
+  // around the unused arc on the entity ring so they don't overlap typed ones.
+  const entityRing = RADIAL_BANDS.person ?? 380;
+  const entitiesByCat = new Map<Category, LayoutNode[]>();
+  for (const n of nodes) {
+    if (n.id === egoId) continue;
+    if (n.cat === "claim" || n.cat === "synthesis" || n.cat === "item") continue;
+    let arr = entitiesByCat.get(n.cat);
+    if (!arr) { arr = []; entitiesByCat.set(n.cat, arr); }
+    arr.push(n);
+  }
+  for (const [cat, arr] of entitiesByCat) {
+    const sectorCenter = CATEGORY_ANGLE[cat];
+    if (sectorCenter != null) {
+      const sectorWidth = Math.PI / 3;
+      arr.forEach((n, i) => {
+        const angle = arr.length === 1
+          ? sectorCenter
+          : sectorCenter - sectorWidth / 2 + (sectorWidth * (i + 0.5)) / arr.length;
+        angleOf.set(n.id, angle);
+        slotXY.set(n.id, {
+          x: cx + Math.cos(angle) * (RADIAL_BANDS[cat] ?? entityRing),
+          y: cy + Math.sin(angle) * (RADIAL_BANDS[cat] ?? entityRing),
+        });
+      });
+    } else {
+      // No sector: spread evenly across the full ring.
+      arr.forEach((n, i) => {
+        const angle = (Math.PI * 2 * (i + 0.5)) / arr.length;
+        angleOf.set(n.id, angle);
+        slotXY.set(n.id, {
+          x: cx + Math.cos(angle) * (RADIAL_BANDS[cat] ?? entityRing),
+          y: cy + Math.sin(angle) * (RADIAL_BANDS[cat] ?? entityRing),
+        });
+      });
+    }
+  }
+
+  // Pass 3a: build a map of {claim/synthesis/item id -> primary entity id}
+  // by walking the link graph.
+  function primaryEntityOf(id: string): string | null {
+    for (const l of links) {
+      if (l.s === id && l.t.startsWith("entity:")) return l.t;
+      if (l.t === id && l.s.startsWith("entity:")) return l.s;
+    }
+    return null;
+  }
+
+  // Pass 3b: synthesis nodes sit at the angle of their anchor entity, on
+  // the synthesis ring. Multiple syntheses sharing one anchor jitter slightly.
+  const synthsByAnchor = new Map<string | null, LayoutNode[]>();
+  // Pass 3c: claim nodes sit in a tight arc at the angle of their anchor.
+  const claimsByAnchor = new Map<string | null, LayoutNode[]>();
+  // Pass 3d: item nodes ditto on the outermost ring.
+  const itemsByAnchor = new Map<string | null, LayoutNode[]>();
+  for (const n of nodes) {
+    if (n.id === egoId) continue;
+    if (n.cat !== "claim" && n.cat !== "synthesis" && n.cat !== "item") continue;
+    const anchor = primaryEntityOf(n.id);
+    const bucket =
+      n.cat === "synthesis" ? synthsByAnchor :
+      n.cat === "claim"     ? claimsByAnchor : itemsByAnchor;
+    let arr = bucket.get(anchor);
+    if (!arr) { arr = []; bucket.set(anchor, arr); }
+    arr.push(n);
+  }
+
+  function placeAroundAnchor(arr: LayoutNode[], anchorId: string | null, ring: number, arcSpread: number) {
+    // Default angle for orphaned nodes (no entity anchor): spread evenly
+    // around the ring without overlapping any single entity sector.
+    const baseAngle = anchorId != null ? (angleOf.get(anchorId) ?? null) : null;
+    if (baseAngle == null) {
+      arr.forEach((n, i) => {
+        const angle = (Math.PI * 2 * (i + 0.5)) / arr.length;
+        slotXY.set(n.id, { x: cx + Math.cos(angle) * ring, y: cy + Math.sin(angle) * ring });
+      });
+      return;
+    }
+    arr.forEach((n, i) => {
+      const offset = arr.length === 1
+        ? 0
+        : ((i + 0.5) / arr.length - 0.5) * arcSpread;
+      const angle = baseAngle + offset;
+      slotXY.set(n.id, { x: cx + Math.cos(angle) * ring, y: cy + Math.sin(angle) * ring });
+    });
+  }
+
+  for (const [anchor, arr] of synthsByAnchor) placeAroundAnchor(arr, anchor, RADIAL_BANDS.synthesis ?? 230, Math.PI / 12);
+  for (const [anchor, arr] of claimsByAnchor) placeAroundAnchor(arr, anchor, RADIAL_BANDS.claim ?? 560, Math.PI / 5);
+  for (const [anchor, arr] of itemsByAnchor)  placeAroundAnchor(arr, anchor, RADIAL_BANDS.item ?? 720, Math.PI / 6);
+
+  const state: LayoutState[] = nodes.map(n => {
+    const isEgo = n.id === egoId;
+    const slot = slotXY.get(n.id) ?? { x: cx, y: cy };
     return {
-      id: n.id,
-      cat: n.cat,
-      x: cx + Math.cos(a) * r + (Math.random() - 0.5) * 20,
-      y: cy + Math.sin(a) * r + (Math.random() - 0.5) * 20,
-      vx: 0,
-      vy: 0,
-      pinned: n.id === egoId,
-      dragging: false,
-      degree: 0,
+      id: n.id, cat: n.cat,
+      x: slot.x, y: slot.y, vx: 0, vy: 0,
+      pinned: isEgo, dragging: false, degree: 0,
+      slotX: slot.x, slotY: slot.y,
     };
   });
   const byId = new Map(state.map(s => [s.id, s]));
@@ -119,33 +260,6 @@ export function initLayout(
     const b = byId.get(l.t);
     if (a) a.degree++;
     if (b) b.degree++;
-  }
-
-  if (egoId) {
-    const ego = byId.get(egoId);
-    if (ego) {
-      ego.x = cx;
-      ego.y = cy;
-      ego.pinned = true;
-    }
-  }
-
-  // Slot direct neighbors of ego around a fixed-radius ring so the topology is
-  // legible even when forces are in motion.
-  const neighbors: string[] = [];
-  if (egoId) {
-    const seen = new Set<string>();
-    for (const l of links) {
-      if (l.s === egoId && !seen.has(l.t)) { seen.add(l.t); neighbors.push(l.t); }
-      else if (l.t === egoId && !seen.has(l.s)) { seen.add(l.s); neighbors.push(l.s); }
-    }
-    neighbors.forEach((id, i) => {
-      const s = byId.get(id);
-      if (!s) return;
-      s.angleSlot = (i / Math.max(1, neighbors.length)) * Math.PI * 2;
-      s.x = cx + Math.cos(s.angleSlot) * DEFAULT_PARAMS.selfOrbit;
-      s.y = cy + Math.sin(s.angleSlot) * DEFAULT_PARAMS.selfOrbit;
-    });
   }
 
   const params: LayoutParams = { ...DEFAULT_PARAMS };
@@ -170,109 +284,32 @@ export function initLayout(
     state.forEach(s => { s.dragging = false; });
   }
 
-  function catCenters() {
-    const m = new Map<string, { x: number; y: number; n: number }>();
-    for (const s of state) {
-      let c = m.get(s.cat);
-      if (!c) { c = { x: 0, y: 0, n: 0 }; m.set(s.cat, c); }
-      c.x += s.x; c.y += s.y; c.n++;
-    }
-    for (const c of m.values()) { c.x /= c.n; c.y /= c.n; }
-    return m;
-  }
-
   function step() {
-    // Pairwise repulsion (O(n²) — fine for the tens-to-hundreds of nodes
-    // a single user's brain produces; no Barnes-Hut needed at this scale).
-    for (let i = 0; i < state.length; i++) {
-      const a = state[i];
-      for (let j = i + 1; j < state.length; j++) {
-        const b = state[j];
-        let dx = a.x - b.x, dy = a.y - b.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 1) { d2 = 1; dx = 1; dy = 0; }
-        const repel = a.dragging || b.dragging ? params.dragRepel : params.repulse;
-        const f = repel / d2;
-        const d = Math.sqrt(d2);
-        const fx = (dx / d) * f, fy = (dy / d) * f;
-        a.vx += fx; a.vy += fy;
-        b.vx -= fx; b.vy -= fy;
-      }
-    }
-    // Spring along links
-    for (const l of links) {
-      const a = byId.get(l.s);
-      const b = byId.get(l.t);
-      if (!a || !b) continue;
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 1;
-      const diff = d - params.linkDist;
-      const fx = (dx / d) * diff * params.linkK;
-      const fy = (dy / d) * diff * params.linkK;
-      a.vx += fx; a.vy += fy;
-      b.vx -= fx; b.vy -= fy;
-    }
-    // Soft pull toward category centroid
-    const centers = catCenters();
-    for (const s of state) {
-      const c = centers.get(s.cat);
-      if (!c) continue;
-      s.vx += (c.x - s.x) * params.catK;
-      s.vy += (c.y - s.y) * params.catK;
-    }
-    // Ego ring force
-    if (neighbors.length > 0) {
-      for (const id of neighbors) {
-        const s = byId.get(id);
-        if (!s || s.dragging || s.pinned) continue;
-        const tx = cx + Math.cos(s.angleSlot ?? 0) * params.selfOrbit;
-        const ty = cy + Math.sin(s.angleSlot ?? 0) * params.selfOrbit;
-        s.vx += (tx - s.x) * params.selfOrbitK;
-        s.vy += (ty - s.y) * params.selfOrbitK;
-      }
-    }
-    // Center pull
-    for (const s of state) {
-      s.vx += (cx - s.x) * params.centerK;
-      s.vy += (cy - s.y) * params.centerK;
-    }
-    // Mouse repel (off by default — was fighting the user when they tried to
-    // grab a node; left in so it can be toggled via tweaks)
-    if (pointer.active && params.mouseRepel > 0) {
-      const R = params.mouseRadius, R2 = R * R;
-      for (const s of state) {
-        if (s.dragging) continue;
-        const dx = s.x - pointer.x, dy = s.y - pointer.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < R2 && d2 > 0.01) {
-          const d = Math.sqrt(d2);
-          const falloff = 1 - d / R;
-          const f = (params.mouseRepel * falloff * falloff) / d2;
-          s.vx += (dx / d) * f;
-          s.vy += (dy / d) * f;
-        }
-      }
-    }
-    // Drag override
+    // Drag override: dragged node tracks the pointer directly.
     if (draggingId != null && targetPos) {
       const s = byId.get(draggingId);
       if (s) {
-        s.vx = (targetPos.x - s.x) * 0.6;
-        s.vy = (targetPos.y - s.y) * 0.6;
+        s.x = targetPos.x;
+        s.y = targetPos.y;
+        s.vx = 0; s.vy = 0;
       }
     }
-    // Integrate
+    // Slot pull: every other non-pinned node lerps back toward its slot.
+    // Strong enough that release-from-drag snaps within ~10 frames.
+    const SLOT_K = 0.12;
     for (const s of state) {
-      if (s.pinned) { s.vx = 0; s.vy = 0; continue; }
-      if (s.dragging) { s.x += s.vx; s.y += s.vy; continue; }
-      s.vx *= params.damp; s.vy *= params.damp;
-      s.x += s.vx; s.y += s.vy;
+      if (s.pinned || s.dragging) continue;
+      if (s.slotX == null || s.slotY == null) continue;
+      const dx = s.slotX - s.x;
+      const dy = s.slotY - s.y;
+      // Critically-damped spring: position += dx * SLOT_K, velocity stays near 0.
+      s.x += dx * SLOT_K;
+      s.y += dy * SLOT_K;
+      s.vx = 0; s.vy = 0;
     }
+    // Pointer is read by mouse-effect features but no longer drives layout.
+    void pointer;
   }
-
-  // Pre-settle so initial render is stable, not a flying-around spaghetti
-  // that resolves over a second.
-  for (let i = 0; i < 500; i++) step();
 
   return {
     state,

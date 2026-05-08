@@ -161,53 +161,10 @@ export function NodeMark({
           </text>
         </g>
       )}
-      {showCard && !node.isEgo && (
-        <g transform={`translate(${radius + 10}, ${-radius})`} style={{ pointerEvents: "none" }}>
-          <rect
-            x={0}
-            y={0}
-            width={220}
-            height={68}
-            rx={variant === "cosmos" ? 8 : 0}
-            fill="oklch(0.22 0.012 260 / 0.96)"
-            stroke={hl ? color : "oklch(0.3 0.008 260)"}
-            strokeWidth={hl ? 1.2 : 1}
-          />
-          <text x={12} y={20} fill="oklch(0.96 0.005 260)" fontFamily="Inter, system-ui, sans-serif" fontSize="12" fontWeight={600}>
-            {truncate(node.label, 28)}
-          </text>
-          <text
-            x={12}
-            y={34}
-            fill={color}
-            fontFamily="'JetBrains Mono', monospace"
-            fontSize="9"
-            style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
-          >
-            {node.cat}
-            {node.sources ? ` · ${node.sources} ${node.sources === 1 ? "source" : "sources"}` : ""}
-            {node.facts ? ` · ${node.facts} facts` : ""}
-          </text>
-          {node.excerpt && (
-            <foreignObject x={12} y={38} width={200} height={26}>
-              <div
-                style={{
-                  fontFamily: "Inter, system-ui, sans-serif",
-                  fontSize: 10.5,
-                  lineHeight: 1.3,
-                  color: "oklch(0.72 0.01 260)",
-                  overflow: "hidden",
-                  display: "-webkit-box",
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: "vertical",
-                }}
-              >
-                {node.excerpt}
-              </div>
-            </foreignObject>
-          )}
-        </g>
-      )}
+      {/* Inline detail card removed: it overlapped unreadably whenever
+        * two nodes sat near each other. The right-side DetailPanel is now
+        * the single source of truth for full content; clicking a node
+        * opens the panel and dims everything that isn't a 1-hop neighbor. */}
     </g>
   );
 }

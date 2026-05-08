@@ -10,7 +10,7 @@
 // any highlight set is active, so cited subgraphs read clearly.
 
 import { useEffect, useMemo, useRef } from "react";
-import { catColor, linkColor, type Category, type LinkKind, LINK_STYLE } from "../../lib/canvasColors";
+import { linkColor, type LinkKind, LINK_STYLE } from "../../lib/canvasColors";
 import type { Layout } from "../../lib/forceLayout";
 import { NodeMark, type DisplayNode, type Variant } from "./NodeMark";
 
@@ -20,12 +20,6 @@ export interface GraphLink {
   kind: LinkKind;
 }
 
-export interface GraphHull {
-  cat: Category;
-  cx: number;
-  cy: number;
-  r: number;
-}
 
 export interface GraphProps {
   layout: Layout;
@@ -40,6 +34,9 @@ export interface GraphProps {
   cameraRef: React.MutableRefObject<{ x: number; y: number; k: number }>;
   onCamera: () => void;
   onNodeClick?: (id: string) => void;
+  /** Click on empty canvas (didn't hit a node and didn't pan). Used to clear
+   *  focus mode without forcing the user to find an Esc key or close button. */
+  onCanvasClick?: () => void;
   /** Bumps when camera changes — React re-renders so the transform style updates. */
   cameraVersion: number;
 }
@@ -47,15 +44,17 @@ export interface GraphProps {
 export function Graph({
   layout, nodes, links, variant, showHulls,
   highlighted, preHighlighted, pulseId, flowEdges,
-  cameraRef, onCamera, onNodeClick, cameraVersion,
+  cameraRef, onCamera, onNodeClick, onCanvasClick, cameraVersion: _cameraVersion,
 }: GraphProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Stable refs so interaction listeners don't re-attach every render.
   const onCameraRef = useRef(onCamera);
   const onNodeClickRef = useRef(onNodeClick);
+  const onCanvasClickRef = useRef(onCanvasClick);
   useEffect(() => { onCameraRef.current = onCamera; }, [onCamera]);
   useEffect(() => { onNodeClickRef.current = onNodeClick; }, [onNodeClick]);
+  useEffect(() => { onCanvasClickRef.current = onCanvasClick; }, [onCanvasClick]);
 
   // Pan / zoom / drag wiring — installed once.
   useEffect(() => {
@@ -146,6 +145,9 @@ export function Graph({
           : draggingId;
         layout.releaseDrag();
         if (!didDrag) onNodeClickRef.current?.(id);
+      } else if (panning && !didDrag) {
+        // Pure click on empty canvas: tell Canvas to clear focus.
+        onCanvasClickRef.current?.();
       }
       draggingId = null;
       panning = false;
@@ -172,35 +174,17 @@ export function Graph({
 
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
 
-  const hulls = useMemo<GraphHull[]>(() => {
-    const byCat = new Map<Category, typeof layout.state>();
-    for (const s of layout.state) {
-      const arr = byCat.get(s.cat) ?? [];
-      arr.push(s);
-      byCat.set(s.cat, arr);
-    }
-    const out: GraphHull[] = [];
-    byCat.forEach((arr, cat) => {
-      if (arr.length < 2) return;
-      let cx = 0, cy = 0;
-      for (const a of arr) { cx += a.x; cy += a.y; }
-      cx /= arr.length; cy /= arr.length;
-      let r = 0;
-      for (const a of arr) {
-        const d = Math.hypot(a.x - cx, a.y - cy);
-        if (d > r) r = d;
-      }
-      out.push({ cat, cx, cy, r: r + 70 });
-    });
-    return out;
-    // We intentionally re-compute on every cameraVersion bump too: the
-    // physics step drifts node positions every RAF, so hulls follow.
-  }, [layout, cameraVersion]);
+  // hulls were used by the old force-directed layout to outline category
+  // clusters — redundant now that nodes are deterministically slotted on
+  // labeled rings.
 
   const cam = cameraRef.current;
   const camStyle = `translate(${cam.x}px, ${cam.y}px) scale(${cam.k})`;
   const hasHL = highlighted.size > 0;
-  const lodCard = cam.k > 1.2;
+  // Inline detail cards are gone — they overlapped each other unreadably
+  // when nodes sat close. The DetailPanel on the right is the single source
+  // of truth for full content now. Labels still appear at moderate zoom.
+  const lodCard = false;
   const lodLabel = cam.k > 0.55;
 
   return (
@@ -226,42 +210,43 @@ export function Graph({
         </defs>
 
         <g style={{ transform: camStyle, transformOrigin: "0 0" }}>
-          {showHulls && variant === "cosmos" && hulls.map(h => (
-            <circle
-              key={h.cat}
-              cx={h.cx}
-              cy={h.cy}
-              r={h.r}
-              fill={catColor(h.cat, 0.035)}
-              stroke={catColor(h.cat, 0.18)}
-              strokeDasharray="2 6"
-              strokeWidth={1}
-            />
-          ))}
-          {showHulls && variant === "blueprint" && hulls.map(h => (
-            <g key={h.cat}>
-              <rect
-                x={h.cx - h.r}
-                y={h.cy - h.r}
-                width={h.r * 2}
-                height={h.r * 2}
-                fill="none"
-                stroke={catColor(h.cat, 0.22)}
-                strokeDasharray="2 4"
-                strokeWidth={1}
-              />
-              <text
-                x={h.cx - h.r + 8}
-                y={h.cy - h.r + 14}
-                fill={catColor(h.cat, 0.85)}
-                fontFamily="'JetBrains Mono', monospace"
-                fontSize="10"
-                style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
-              >
-                {h.cat}
-              </text>
-            </g>
-          ))}
+          {/* Concentric ring guides at the radial bands. Drawn first so
+            * everything else (edges, nodes) sits on top. Faint enough to
+            * read as orientation, not as content. */}
+          {showHulls && (() => {
+            const ego = layout.state.find(s => s.pinned);
+            if (!ego) return null;
+            const stroke = variant === "cosmos" ? "oklch(0.45 0.01 260 / 0.18)" : "oklch(0.45 0.01 260 / 0.28)";
+            const labelFill = "oklch(0.5 0.01 260 / 0.6)";
+            const rings = [
+              { r: 230, label: "syntheses" },
+              { r: 380, label: "entities" },
+              { r: 560, label: "claims" },
+            ];
+            return rings.map(ring => (
+              <g key={ring.r}>
+                <circle
+                  cx={ego.x}
+                  cy={ego.y}
+                  r={ring.r}
+                  fill="none"
+                  stroke={stroke}
+                  strokeDasharray="3 6"
+                  strokeWidth={1}
+                />
+                <text
+                  x={ego.x + 6}
+                  y={ego.y - ring.r - 6}
+                  fill={labelFill}
+                  fontFamily="'JetBrains Mono', monospace"
+                  fontSize="10"
+                  style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
+                >
+                  {ring.label}
+                </text>
+              </g>
+            ));
+          })()}
 
           {/* Edges */}
           {links.map((l, i) => {
@@ -272,8 +257,11 @@ export function Graph({
             const dim = hasHL && !isHL;
             const key = `${l.s}→${l.t}`;
             const isFlowing = flowEdges.has(key);
-            const base = linkColor(l.kind, dim ? 0.08 : isHL ? 1 : 0.45);
-            const sw = isHL ? 2.2 : isFlowing ? 2 : 1;
+            // At rest, edges are barely visible (alpha 0.12) so the canvas
+            // reads as a constellation, not a tangle. When a node is
+            // focused, its edges flare to full and the rest fade further.
+            const base = linkColor(l.kind, dim ? 0.04 : isHL ? 1 : 0.12);
+            const sw = isHL ? 2.2 : isFlowing ? 2 : 0.6;
             const dash = LINK_STYLE[l.kind].dash || undefined;
 
             // Trim endpoints to the node disc so arrows don't visually overlap nodes.

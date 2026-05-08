@@ -411,6 +411,151 @@ body { overflow: hidden; }
 }
 
 /* ────────────────────────────────────────────────────────────────────────
+   Detail panel — slides in from the right edge of the canvas when a
+   node is focused. Replaces the on-zoom hover cards (which overlapped
+   each other unreadably) with a single, dedicated, scrollable surface.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.m3-detail {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 360px;
+  max-width: calc(100vw - 60px);
+  max-height: calc(100vh - 28px);
+  display: flex;
+  flex-direction: column;
+  background: var(--m3-surface);
+  border: 1px solid var(--m3-line);
+  border-radius: 10px;
+  box-shadow: 0 18px 40px oklch(0 0 0 / 0.5);
+  z-index: 20;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--m3-ink);
+  overflow: hidden;
+  animation: m3-detail-slide 220ms ease-out;
+}
+@keyframes m3-detail-slide {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.m3-detail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--m3-line);
+}
+.m3-detail__cat {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+}
+.m3-detail__close {
+  background: transparent;
+  border: none;
+  color: var(--m3-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 6px;
+}
+.m3-detail__close:hover { color: var(--m3-ink); }
+
+.m3-detail__title {
+  padding: 12px 14px 4px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--m3-ink);
+}
+
+.m3-detail__body { padding: 4px 14px 12px; overflow-y: auto; }
+.m3-detail__prose { margin: 0 0 8px; line-height: 1.55; color: oklch(0.92 0.005 260); }
+.m3-detail__meta {
+  margin: 0 0 4px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--m3-muted);
+}
+.m3-detail__quote {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--m3-bg);
+  border: 1px solid var(--m3-line);
+  border-radius: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: oklch(0.84 0.008 260);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.m3-detail__neighbors {
+  border-top: 1px solid var(--m3-line);
+  padding: 10px 6px 12px;
+  overflow-y: auto;
+}
+.m3-detail__neighbors-label {
+  padding: 0 8px 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--m3-muted);
+}
+.m3-detail__neighbors ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.m3-detail__neighbors li button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--m3-ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.m3-detail__neighbors li button:hover {
+  background: var(--m3-surface-2);
+  border-color: var(--m3-line);
+}
+.m3-detail__neighbor-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.m3-detail__neighbor-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m3-detail__neighbor-rel {
+  flex: none;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--m3-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
    Bottom-right stack (legend)
    ──────────────────────────────────────────────────────────────────────── */
 

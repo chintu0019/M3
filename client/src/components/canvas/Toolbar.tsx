@@ -15,11 +15,13 @@ export interface ToolbarProps {
   unconfigured: boolean;
   showAllSources: boolean;
   onToggleSources: () => void;
+  showAllClaims: boolean;
+  onToggleClaims: () => void;
 }
 
 export function Toolbar({
   variant, setVariant, onFit, zoom, setZoom, onSettings, onFiles, unconfigured,
-  showAllSources, onToggleSources,
+  showAllSources, onToggleSources, showAllClaims, onToggleClaims,
 }: ToolbarProps) {
   return (
     <div className="m3-toolbar">
@@ -37,6 +39,14 @@ export function Toolbar({
         <button onClick={() => setZoom(zoom * 1.2)} aria-label="Zoom in">+</button>
         <button onClick={onFit}>Fit</button>
       </div>
+      <button
+        className={`m3-toolbar__sources${showAllClaims ? " on" : ""}`}
+        onClick={onToggleClaims}
+        title={showAllClaims ? "Hide all atomic claims" : "Reveal all atomic claims"}
+        aria-pressed={showAllClaims}
+      >
+        Claims
+      </button>
       <button
         className={`m3-toolbar__sources${showAllSources ? " on" : ""}`}
         onClick={onToggleSources}
