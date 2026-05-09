@@ -1,19 +1,36 @@
 // Background update flow.
 //
-// On mount we ask Tauri's updater plugin if a new release is available. If yes,
-// the bundle is downloaded silently (with a progress bar) and once ready we show
-// a banner with a "Restart now" button that calls process.relaunch().
+// On mount, on window focus, and every UPDATE_INTERVAL_MS we ask Tauri's updater
+// plugin whether a new release is available. If yes, the bundle is downloaded
+// silently (with a progress bar) and a "Restart now" banner appears. The user
+// keeps working — the next click of the button calls process.relaunch().
+//
+// Polling guards:
+//   - MIN_GAP_MS prevents back-to-back checks (focus events fire often).
+//   - We skip new checks once a download is in flight or a "ready" banner is
+//     already showing — no point starting a second flow.
+//   - All errors land in console.warn (offline, sig mismatch, no endpoint).
 //
 // In dev (running outside Tauri, or if the updater plugin isn't reachable) every
 // call no-ops gracefully — the banner just never shows.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Stage =
   | { kind: "idle" }
   | { kind: "downloading"; progress: number }
   | { kind: "ready"; version: string }
   | { kind: "error"; message: string };
+
+// Periodic recheck cadence. 6h is a sensible compromise: long enough that an
+// always-open M3 doesn't hammer GitHub, short enough that a release shipped in
+// the morning lands by lunch without a manual quit/relaunch.
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+// Minimum gap between two consecutive checks. Window focus events fire on
+// every alt-tab; without this guard a rapid focus dance would hammer the
+// updater endpoint and waste GitHub's CDN budget.
+const MIN_GAP_MS = 30 * 60 * 1000;
 
 const insideTauri = () =>
   typeof window !== "undefined" &&
@@ -24,12 +41,27 @@ export default function UpdateBanner() {
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
   const [dismissed, setDismissed] = useState(false);
 
+  // Refs so the polling closure inside the mount-only useEffect can read
+  // current state without resubscribing intervals/listeners on every render.
+  const stageRef = useRef(stage);
+  useEffect(() => {
+    stageRef.current = stage;
+  }, [stage]);
+
   useEffect(() => {
     if (!insideTauri()) return;
 
     let cancelled = false;
+    let lastCheckAt = 0;
 
-    (async () => {
+    const runCheck = async () => {
+      if (cancelled) return;
+      // Already mid-flow? leave it alone.
+      const k = stageRef.current.kind;
+      if (k === "downloading" || k === "ready") return;
+      if (Date.now() - lastCheckAt < MIN_GAP_MS) return;
+      lastCheckAt = Date.now();
+
       try {
         const { check } = await import("@tauri-apps/plugin-updater");
         const update = await check();
@@ -63,10 +95,27 @@ export default function UpdateBanner() {
         // Silent in production; surfaced in console for debugging.
         console.warn("updater check failed:", err);
       }
-    })();
+    };
+
+    // Initial check on mount.
+    void runCheck();
+
+    // Periodic check every UPDATE_INTERVAL_MS while the app stays open.
+    const intervalId = window.setInterval(() => {
+      void runCheck();
+    }, UPDATE_INTERVAL_MS);
+
+    // Focus-driven check: regaining focus after switching apps is a natural
+    // moment to recheck. MIN_GAP_MS keeps it from firing on rapid alt-tabs.
+    const onFocus = () => {
+      void runCheck();
+    };
+    window.addEventListener("focus", onFocus);
 
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 
