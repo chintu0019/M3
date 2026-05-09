@@ -114,15 +114,19 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      # contents: write — push the bump branch
+      # pull-requests: write — open the PR back to main
       contents: write
+      pull-requests: write
     env:
+      # github.ref_name is git-ref-restricted (no shell metacharacters), but
+      # routing it through env keeps the workflow free of inline expansion
+      # in run: blocks — see the security note at the top of build.env.
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-          # Use the default GITHUB_TOKEN; the push back to main is allowed
-          # because the job declares contents: write.
 
       - uses: actions/download-artifact@v4
         with:
@@ -145,16 +149,34 @@ jobs:
             -e "s|^  sha256 \".*\"|  sha256 \"${DMG_SHA}\"|" \
             Casks/m3.rb
 
-      - name: Commit and push
+      - name: Open PR with cask bump
+        # main is protected by the `protect` ruleset (PR + 1 review required,
+        # no force-push, no deletion). The default GITHUB_TOKEN is classified
+        # as an Integration actor and is not on the bypass list, so a direct
+        # push to main is rejected. Instead, push the bump to a release-
+        # scoped branch and open a PR back to main — the maintainer
+        # one-click-merges with their admin bypass.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if git diff --quiet Casks/m3.rb; then
-            echo "Cask already up to date, nothing to commit"
+            echo "Cask already up to date, nothing to do"
             exit 0
           fi
+          BRANCH="cask-bump-${TAG}"
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
+          git checkout -b "$BRANCH"
           git add Casks/m3.rb
-          # [skip ci] avoids a self-trigger loop if main ever runs CI on push.
-          git commit -m "chore(cask): bump M3 to ${TAG} [skip ci]"
-          git push origin main
+          git commit -m "chore(cask): bump M3 to ${TAG}"
+          git push --force-with-lease origin "$BRANCH"
+          # Idempotent: re-running the workflow on the same tag refreshes
+          # the branch and reuses an existing PR if one is already open.
+          if ! gh pr view "$BRANCH" --json number --jq .number 2>/dev/null; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(cask): bump M3 to ${TAG}" \
+              --body "Automated bump from the release workflow for ${TAG}. Updates version + sha256 in Casks/m3.rb to match the freshly built .dmg. One-click merge to keep the Homebrew tap in sync."
+          fi
