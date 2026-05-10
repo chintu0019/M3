@@ -161,6 +161,11 @@ def reindex(
         "--topical",
         help="Rebuild only the topical signatures index used by the canvas v2 force layout.",
     ),
+    labels: bool = typer.Option(
+        False,
+        "--labels",
+        help="Backfill ItemMeta.title (deterministic) and ClaimMeta.headline (LLM call per claim).",
+    ),
 ):
     """Rebuild FTS, hook, and vector indexes from items/meta.
 
@@ -168,12 +173,25 @@ def reindex(
     canvas v2 force-layout index) — does not touch FTS / hook / vector.
     Use this once on existing brains whose entities, claims, and
     syntheses predate the topical-refresh ingest hooks.
+
+    With ``--labels`` walks every item / claim and backfills the
+    ``title`` / ``headline`` fields used by the canvas v2 nodes — items
+    deterministically (frontmatter title / first line / filename stem)
+    and claims via a small LLM call per claim. Skips records that
+    already have the field set so reruns are idempotent.
     """
     import asyncio as _asyncio
     brain_root = brain or _default_brain()
     if not (brain_root / "self.md").exists():
         typer.echo(f"brain at {brain_root} is not initialized", err=True)
         raise typer.Exit(code=1)
+
+    if labels:
+        n_items, n_claims, errors = _asyncio.run(_reindex_labels(brain_root, _make_llm()))
+        typer.echo(f"updated {n_items} item titles and {n_claims} claim headlines.")
+        for e in errors:
+            typer.echo(f"  error: {e}", err=True)
+        return
 
     if topical:
         n, errors = _asyncio.run(_reindex_topical(brain_root, _make_embedder()))
@@ -188,6 +206,53 @@ def reindex(
     if result.errors:
         for e in result.errors:
             typer.echo(f"  error: {e}", err=True)
+
+
+async def _reindex_labels(brain_root: Path, llm) -> tuple[int, int, list[str]]:
+    """Backfill item titles (deterministic) and claim headlines (LLM).
+
+    Walks every persisted item / claim. Items get ``title`` filled from
+    ``extract_title`` (frontmatter > first non-empty line > filename
+    stem) — no LLM. Claims get ``headline`` from a single
+    ``generate_headline`` LLM call each. Records that already have the
+    field set are skipped, so reruns are idempotent. Per-record errors
+    are collected and reported instead of aborting the walk.
+    """
+    from m3.brain.claims import iter_claims, write_claim
+    from m3.brain.items import iter_metas, write_meta
+    from m3.core.headline import generate_headline
+    from m3.core.item_title import extract_title
+
+    n_items = 0
+    n_claims = 0
+    errors: list[str] = []
+
+    for meta in iter_metas(brain_root):
+        if meta.title:
+            continue
+        new_title = extract_title(meta.extracted_text, meta.original_filename)
+        if not new_title:
+            continue
+        meta.title = new_title
+        try:
+            write_meta(brain_root, meta)
+            n_items += 1
+        except Exception as e:
+            errors.append(f"item:{meta.id}: {e}")
+
+    for claim in iter_claims(brain_root):
+        if claim.headline:
+            continue
+        try:
+            new_headline = await generate_headline(proposition=claim.proposition, llm=llm)
+            if new_headline:
+                claim.headline = new_headline
+                write_claim(brain_root, claim)
+                n_claims += 1
+        except Exception as e:
+            errors.append(f"claim:{claim.id}: {e}")
+
+    return n_items, n_claims, errors
 
 
 async def _reindex_topical(brain_root: Path, embedder) -> tuple[int, list[str]]:
