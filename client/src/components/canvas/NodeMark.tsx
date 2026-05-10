@@ -8,6 +8,10 @@
 
 import { catColor, type Category } from "../../lib/canvasColors";
 
+export const ENTITY_CATS: ReadonlySet<Category> = new Set([
+  "person", "project", "concept", "reading", "decision", "other",
+]);
+
 export type Variant = "cosmos" | "blueprint";
 
 export interface DisplayNode {
@@ -45,7 +49,26 @@ export interface NodeMarkProps {
 
 export function NodeMark({
   node, x, y, radius, variant, hl, dim, pre, pulse, showLabel, showCard,
+  v2 = false, zoomK = 1,
 }: NodeMarkProps) {
+  // Canvas v2: multi-resolution zoom gating. Suppress dense-text node types
+  // at far zoom; they re-appear as the user zooms in. v1 path is unaffected.
+  //
+  // Thresholds (in camera zoom-k units; see Graph.tsx camera handling):
+  //   k <  0.5  — only entities render
+  //   k <  0.9  — claims and items still suppressed (so syntheses appear at 0.5)
+  //   k <  1.4  — items still suppressed (so claims appear at 0.9)
+  //   k >= 1.4  — everything resolves
+  //
+  // Ego ("self") rendering is suppressed in v2 by Graph.tsx before NodeMark
+  // is even called; this gate only handles claim/item/synthesis.
+  if (v2) {
+    const cat = node.cat;
+    if (cat === "claim" && zoomK < 0.9) return null;
+    if (cat === "item"  && zoomK < 1.4) return null;
+    if (cat === "synthesis" && zoomK < 0.5) return null;
+  }
+
   const color = catColor(node.cat, 1);
   const colorDim = catColor(node.cat, 0.25);
   const fill = variant === "cosmos" ? "oklch(0.22 0.012 260)" : "oklch(0.20 0.01 260)";
