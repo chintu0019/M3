@@ -80,7 +80,9 @@ export const DEFAULT_PARAMS: LayoutParams = {
 // "now" is the center and similarity, not type, drives clustering.
 const V2_TOPICAL_K = 0.0009;   // attraction strength scaled by similarity
 const V2_RECENCY_K = 0.012;    // radial pull toward target ring
-const V2_REPULSE   = 18000;    // Coulomb-style anti-overlap
+const V2_REPULSE   = 60000;    // Coulomb-style anti-overlap. Tuned for wide
+                                //   pills (~200-300px world): at d=250 produces
+                                //   ~1 px/frame, enough to actually separate.
 const V2_DAMP      = 0.55;     // velocity damping per frame — lower than 0.82
                                 //   so equilibrium velocity collapses faster
 const V2_MAX_V     = 4;        // hard per-frame velocity cap so a freshly-cooled
@@ -475,8 +477,11 @@ export function initLayout(
         const d2 = Math.max(100, dx*dx + dy*dy);
         const d = Math.sqrt(d2);
 
-        // Coulomb repulsion (always)
-        const fr = (V2_REPULSE / d2) * temp;
+        // Coulomb repulsion (always) — NOT subject to cooling. Repulsion is
+        // structural (nodes can't overlap), not animated. If we cool it,
+        // wide pills that drift together late in the schedule lack the push
+        // to separate, and then the hard-freeze locks the overlap in.
+        const fr = V2_REPULSE / d2;
         a.vx -= (dx / d) * fr; a.vy -= (dy / d) * fr;
         b.vx += (dx / d) * fr; b.vy += (dy / d) * fr;
 
@@ -520,7 +525,27 @@ export function initLayout(
     //    in a single tick; the cap also bounds drift if cooling ever fails.
     //    Once cool, velocity is hard-zeroed every frame for non-dragged nodes,
     //    eliminating perpetual micro-drift after settling.
-    const cool = temp < 0.1;
+    //
+    //    Overlap gate: skip the freeze for any frame in which any pair of
+    //    pills is too close to each other. Otherwise the cooling schedule
+    //    can freeze the system in a state where wide pills still visibly
+    //    overlap. N^2 is fine — N is small.
+    let anyTooClose = false;
+    const MIN_SEP = 280;
+    const MIN_SEP_SQ = MIN_SEP * MIN_SEP;
+    outer: for (let i = 0; i < state.length; i++) {
+      for (let j = i + 1; j < state.length; j++) {
+        const a = state[i];
+        const b = state[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        if (dx * dx + dy * dy < MIN_SEP_SQ) {
+          anyTooClose = true;
+          break outer;
+        }
+      }
+    }
+    const cool = temp < 0.1 && !anyTooClose;
     for (const s of state) {
       if (s.dragging) { s.vx = 0; s.vy = 0; continue; }
       s.vx *= V2_DAMP; s.vy *= V2_DAMP;
