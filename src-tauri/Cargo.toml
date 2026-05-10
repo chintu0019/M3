@@ -1,6 +1,6 @@
 [package]
 name = "m3-app"
-version = "0.1.4"
+version = "0.2.0"
 description = "M3 personal brain — local desktop shell"
 authors = ["M3"]
 edition = "2021"
