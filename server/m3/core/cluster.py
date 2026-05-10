@@ -47,6 +47,9 @@ class ClusterNode:
     confidence: float | None = None        # for claim nodes
     synthesis_id: str | None = None        # for synthesis nodes
     topical_vec: list[float] | None = None  # 768-dim signature; populated from TopicalIndex
+    headline: str | None = None             # claim headline (3-7 word interpretive label)
+    title: str | None = None                # item title (clean human-readable label)
+    proposition: str | None = None          # full claim proposition (label is truncated)
 
 
 @dataclass
@@ -105,9 +108,11 @@ async def build_cluster(
                 claim_node_id = f"claim:{claim.id}"
                 _add(ClusterNode(
                     id=claim_node_id, type="claim",
-                    label=claim.proposition[:80],
+                    label=(claim.headline or claim.proposition[:80]),
                     excerpt=claim.proposition,
                     claim_id=str(claim.id), confidence=claim.confidence,
+                    headline=claim.headline or None,
+                    proposition=claim.proposition,
                 ))
                 graph.edges.append(ClusterEdge(
                     source=item_node_id, target=claim_node_id, kind="evidence",
@@ -267,12 +272,18 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
             meta = read_meta(brain_root, item_id)
             if meta is None:
                 continue
-            label = (meta.extracted_text or meta.original_filename or str(item_id))[:60]
+            label = (
+                meta.title
+                or (meta.extracted_text or "").strip()[:60]
+                or meta.original_filename
+                or str(item_id)
+            )
             excerpt = (meta.extracted_text or "")[:280] or None
             _add(ClusterNode(
                 id=f"item:{item_id}", type="item", label=label,
                 kind=meta.kind, when_iso=meta.when_iso,
                 excerpt=excerpt, item_id=str(item_id),
+                title=meta.title,
             ))
             # Link to entities mentioned in this item.
             updates = (meta.llm_output_raw or {}).get("entity_updates") or []
@@ -300,9 +311,11 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
         claim_node_id = f"claim:{claim.id}"
         _add(ClusterNode(
             id=claim_node_id, type="claim",
-            label=claim.proposition[:80],
+            label=(claim.headline or claim.proposition[:80]),
             excerpt=claim.proposition,
             claim_id=str(claim.id), confidence=claim.confidence,
+            headline=claim.headline or None,
+            proposition=claim.proposition,
         ))
         item_node_id = f"item:{claim.item_id}"
         if item_node_id in seen:
