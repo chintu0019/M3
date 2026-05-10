@@ -45,6 +45,7 @@ from m3.core.extract import (
     build_system_prompt,
     process_item_tool_schema,
 )
+from m3.core.item_title import extract_title
 from m3.core.llm import LLMProvider, Tool
 
 logger = logging.getLogger("m3.ingest")
@@ -301,12 +302,14 @@ class Ingester:
             llm_output_raw = parsed.model_dump()
             if extraction_error is not None:
                 llm_output_raw["_extraction_error"] = extraction_error
+            title = extract_title(inp.text, inp.original_filename)
             items_mod.write_meta(self.brain_root, items_mod.ItemMeta(
                 id=inp.item_id, kind=parsed.kind, source=inp.source, created_at=now_iso,
                 original_filename=inp.original_filename, extracted_text=inp.text,
                 when_iso=parsed.interpretation.when.iso, when_source=parsed.interpretation.when.source,
                 hooks=parsed.hooks.model_dump(), llm_output_raw=llm_output_raw,
                 confidence=parsed.interpretation.confidence,
+                title=title,
             ))
 
             # Topical signature for the canvas v2 force layout. Best-effort:
@@ -452,6 +455,7 @@ class Ingester:
                     supporting_span=c.supporting_span,
                     entity_slugs=slugs,
                     created_at=now_iso,
+                    headline=c.headline,
                 )
                 claims_mod.write_claim(self.brain_root, claim_meta)
                 try:
