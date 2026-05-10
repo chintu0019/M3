@@ -10,7 +10,12 @@ rust-version = "1.75"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `devtools` enables the WebKit Inspector (⌘⌥I on macOS) in release builds.
+# Intentional for a single-user self-hosted app: no end-user has anything to
+# hide from themselves, and being able to open Network/Console in production
+# has saved us already (silent updater failures had no other diagnostic
+# surface). Adds ~1MB to the binary.
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
