@@ -81,10 +81,22 @@ export const DEFAULT_PARAMS: LayoutParams = {
 const V2_TOPICAL_K = 0.0009;   // attraction strength scaled by similarity
 const V2_RECENCY_K = 0.012;    // radial pull toward target ring
 const V2_REPULSE   = 8000;     // Coulomb-style anti-overlap
-const V2_DAMP      = 0.82;     // velocity damping per frame
+const V2_DAMP      = 0.55;     // velocity damping per frame — lower than 0.82
+                                //   so equilibrium velocity collapses faster
+const V2_MAX_V     = 4;        // hard per-frame velocity cap so a freshly-cooled
+                                //   layout can't sling a node across the canvas
 const V2_LINK_DIST = 180;      // resting distance for link springs
 const V2_LINK_BASE_K = 0.04;   // baseline spring constant
 const V2_SIM_THRESHOLD = 0.55; // pairs below this similarity don't attract topically
+
+// Cooling schedule. Forces never zero out (recency + topical pulls are always
+// active), so without a temperature term the system settles to a non-zero
+// equilibrium velocity and jitters forever. Multiplying every force by a
+// temperature that decays from 1.0 to V2_COOL_FLOOR over ~10s gives an early
+// "find your spot" phase followed by a near-static at-rest canvas.
+const V2_COOL_FRAMES = 600;    // ~10s at 60Hz
+const V2_COOL_FLOOR  = 0.05;   // residual breathing once cool
+const V2_REHEAT_ON_DRAG = 200; // frames of warmth restored when a drag starts
 
 // Deterministic angle in [0, 2π) from a node id, so v2 layout is stable
 // across reloads even before forces settle.
@@ -316,6 +328,15 @@ export function initLayout(
   let draggingId: string | null = null;
   let targetPos: { x: number; y: number } | null = null;
 
+  // Frame counter for the v2 cooling schedule. Starts hot (frame=0) so the
+  // initial id-hash angles get pulled into clusters, then cools.
+  let frame = 0;
+  function temperature(): number {
+    const t = Math.min(1, frame / V2_COOL_FRAMES);
+    // Quadratic ease-out from 1.0 toward V2_COOL_FLOOR.
+    return V2_COOL_FLOOR + (1 - V2_COOL_FLOOR) * (1 - t) * (1 - t);
+  }
+
   function setMouse(x: number, y: number, active: boolean) {
     pointer.x = x; pointer.y = y; pointer.active = active;
   }
@@ -323,6 +344,9 @@ export function initLayout(
     draggingId = id;
     targetPos = id == null ? null : { x, y };
     state.forEach(s => { s.dragging = s.id === id; });
+    // Reheat: a drag should let neighbors react meaningfully instead of
+    // creeping at the cooled-floor velocity.
+    if (id != null && v2) frame = Math.max(0, frame - V2_REHEAT_ON_DRAG);
   }
   function updateDragTarget(x: number, y: number) {
     if (targetPos) { targetPos.x = x; targetPos.y = y; }
@@ -371,6 +395,10 @@ export function initLayout(
       if (s) { s.x = targetPos.x; s.y = targetPos.y; s.vx = 0; s.vy = 0; }
     }
 
+    // Cooling: every force contribution is multiplied by `temp`. Early frames
+    // run at full strength; once cool the canvas barely breathes.
+    const temp = temperature();
+
     // 1. Recency radial pull — each non-dragged node pulled toward its target ring
     for (let i = 0; i < state.length; i++) {
       const s = state[i];
@@ -378,7 +406,7 @@ export function initLayout(
       const target = recencyRadiusFor(whenIsos[i] ?? null);
       const dx = s.x - cx, dy = s.y - cy;
       const r = Math.hypot(dx, dy) || 1;
-      const drift = (target - r) * V2_RECENCY_K;
+      const drift = (target - r) * V2_RECENCY_K * temp;
       s.vx += (dx / r) * drift;
       s.vy += (dy / r) * drift;
     }
@@ -391,7 +419,7 @@ export function initLayout(
       if (!a || !b) continue;
       const na = nodeMap.get(l.s); const nb = nodeMap.get(l.t);
       const sim = topicalSimilarity(na?.topicalVec ?? null, nb?.topicalVec ?? null);
-      const k = V2_LINK_BASE_K * (0.4 + 0.6 * sim);
+      const k = V2_LINK_BASE_K * (0.4 + 0.6 * sim) * temp;
       const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.hypot(dx, dy) || 1;
       const f = (dist - V2_LINK_DIST) * k;
@@ -412,7 +440,7 @@ export function initLayout(
         const d = Math.sqrt(d2);
 
         // Coulomb repulsion (always)
-        const fr = V2_REPULSE / d2;
+        const fr = (V2_REPULSE / d2) * temp;
         a.vx -= (dx / d) * fr; a.vy -= (dy / d) * fr;
         b.vx += (dx / d) * fr; b.vy += (dy / d) * fr;
 
@@ -420,19 +448,26 @@ export function initLayout(
         const vb = topicalVecs[j];
         const sim = topicalSimilarity(va, vb);
         if (sim >= V2_SIM_THRESHOLD) {
-          const fa = sim * V2_TOPICAL_K * d;
+          const fa = sim * V2_TOPICAL_K * d * temp;
           a.vx += (dx / d) * fa; a.vy += (dy / d) * fa;
           b.vx -= (dx / d) * fa; b.vy -= (dy / d) * fa;
         }
       }
     }
 
-    // 5. Integrate — damped Euler
+    // 5. Integrate — damped Euler with a hard per-frame velocity cap. Without
+    //    the cap a freshly-reheated drag can fling neighbors hundreds of pixels
+    //    in a single tick; the cap also bounds drift if cooling ever fails.
     for (const s of state) {
       if (s.dragging) { s.vx = 0; s.vy = 0; continue; }
       s.vx *= V2_DAMP; s.vy *= V2_DAMP;
+      if (s.vx >  V2_MAX_V) s.vx =  V2_MAX_V;
+      else if (s.vx < -V2_MAX_V) s.vx = -V2_MAX_V;
+      if (s.vy >  V2_MAX_V) s.vy =  V2_MAX_V;
+      else if (s.vy < -V2_MAX_V) s.vy = -V2_MAX_V;
       s.x += s.vx; s.y += s.vy;
     }
+    frame++;
     void pointer;
   }
 
