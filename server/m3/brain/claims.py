@@ -31,6 +31,7 @@ class ClaimMeta:
     proposition: str
     confidence: float
     supporting_span: str
+    headline: str = ""              # 3-7 word interpretive label for the canvas v2 layout
     entity_slugs: list[str] = field(default_factory=list)
     created_at: str = ""              # ISO8601 UTC
 
