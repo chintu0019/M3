@@ -297,6 +297,13 @@ export function initLayout(
   const byId = new Map(state.map(s => [s.id, s]));
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
+  // Parallel arrays for the v2 step's hot loops — indexed by `state[i]`'s
+  // position, so we avoid N^2 Map lookups per frame. Both `state` and
+  // `nodes` were built in the same order via the same `nodes.map(...)` so
+  // index i corresponds to the same logical node in both.
+  const topicalVecs: (number[] | null | undefined)[] = nodes.map(n => n.topicalVec ?? null);
+  const whenIsos: (string | null | undefined)[] = nodes.map(n => n.whenIso ?? null);
+
   for (const l of links) {
     const a = byId.get(l.s);
     const b = byId.get(l.t);
@@ -365,10 +372,10 @@ export function initLayout(
     }
 
     // 1. Recency radial pull — each non-dragged node pulled toward its target ring
-    for (const s of state) {
+    for (let i = 0; i < state.length; i++) {
+      const s = state[i];
       if (s.dragging) continue;
-      const n = nodeMap.get(s.id);
-      const target = recencyRadiusFor(n?.whenIso ?? null);
+      const target = recencyRadiusFor(whenIsos[i] ?? null);
       const dx = s.x - cx, dy = s.y - cy;
       const r = Math.hypot(dx, dy) || 1;
       const drift = (target - r) * V2_RECENCY_K;
@@ -392,32 +399,31 @@ export function initLayout(
       b.vx -= (dx / dist) * f; b.vy -= (dy / dist) * f;
     }
 
-    // 3. Topical attraction across non-linked but topically similar pairs.
-    //    O(N^2) — fine for N < 800. Future: grid-bucket once we ship larger brains.
+    // Pass 3+4 fused: a single O(N^2) pair walk does Coulomb repulsion always
+    // and adds topical attraction when similarity is above threshold.
     for (let i = 0; i < state.length; i++) {
+      const a = state[i];
+      const va = topicalVecs[i];
       for (let j = i + 1; j < state.length; j++) {
-        const a = state[i]; const b = state[j];
-        const na = nodeMap.get(a.id); const nb = nodeMap.get(b.id);
-        const sim = topicalSimilarity(na?.topicalVec ?? null, nb?.topicalVec ?? null);
-        if (sim < V2_SIM_THRESHOLD) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.hypot(dx, dy) || 1;
-        const f = sim * V2_TOPICAL_K * dist;
-        a.vx += (dx / dist) * f; a.vy += (dy / dist) * f;
-        b.vx -= (dx / dist) * f; b.vy -= (dy / dist) * f;
-      }
-    }
-
-    // 4. Repulsion (Coulomb-style) — keeps nodes from stacking
-    for (let i = 0; i < state.length; i++) {
-      for (let j = i + 1; j < state.length; j++) {
-        const a = state[i]; const b = state[j];
-        const dx = b.x - a.x, dy = b.y - a.y;
+        const b = state[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
         const d2 = Math.max(40, dx*dx + dy*dy);
-        const f = V2_REPULSE / d2;
         const d = Math.sqrt(d2);
-        a.vx -= (dx / d) * f; a.vy -= (dy / d) * f;
-        b.vx += (dx / d) * f; b.vy += (dy / d) * f;
+
+        // Coulomb repulsion (always)
+        const fr = V2_REPULSE / d2;
+        a.vx -= (dx / d) * fr; a.vy -= (dy / d) * fr;
+        b.vx += (dx / d) * fr; b.vy += (dy / d) * fr;
+
+        // Topical attraction (only above threshold)
+        const vb = topicalVecs[j];
+        const sim = topicalSimilarity(va, vb);
+        if (sim >= V2_SIM_THRESHOLD) {
+          const fa = sim * V2_TOPICAL_K * d;
+          a.vx += (dx / d) * fa; a.vy += (dy / d) * fa;
+          b.vx -= (dx / d) * fa; b.vy -= (dy / d) * fa;
+        }
       }
     }
 
