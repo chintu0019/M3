@@ -46,6 +46,12 @@ type DisplayNode = {
   excerpt: string | null;
   itemId: string | null;
   sources?: number;
+  /** When this node was first captured / created. Used by v2 force layout
+   *  to place it on the appropriate recency ring. */
+  whenIso?: string | null;
+  /** 768-dim topical signature embedding (or null if not indexed yet).
+   *  Used by v2 force layout for topical attraction. */
+  topicalVec?: number[] | null;
 };
 
 const SUGGESTIONS = [
@@ -142,6 +148,15 @@ export default function Canvas() {
     }
   }, [settingsOpen]);
 
+  // Canvas v2 feature flag. localStorage dev override takes precedence so a
+  // developer can flip v2 on without round-tripping through the settings API.
+  const v2 = useMemo<boolean>(() => {
+    if (typeof window !== "undefined" && window.localStorage.getItem("m3_canvas_v2") === "1") {
+      return true;
+    }
+    return !!settings?.canvas_v2_enabled;
+  }, [settings]);
+
   // Derive display nodes/edges from the cluster response. Memoized so we don't
   // rebuild the layout every render — only when the cluster identity or the
   // sources-visibility state changes.
@@ -208,6 +223,8 @@ export default function Canvas() {
         excerpt: n.excerpt,
         itemId: n.item_id,
         sources: n.type === "entity" ? sourcesByEntity.get(n.id) : undefined,
+        whenIso: n.when_iso ?? null,
+        topicalVec: n.topical_vec ?? null,
       });
     }
 
@@ -228,13 +245,17 @@ export default function Canvas() {
   }, [cluster, showAllSources, showAllClaims, expandedEntities]);
 
   const layout = useMemo<Layout>(() => {
-    const nodes: LayoutNode[] = display.nodes.map(n => ({ id: n.id, cat: n.cat }));
+    const nodes: LayoutNode[] = display.nodes.map(n => ({
+      id: n.id, cat: n.cat,
+      whenIso: n.whenIso ?? null,
+      topicalVec: n.topicalVec ?? null,
+    }));
     const links: LayoutLink[] = display.links.map(l => ({ s: l.s, t: l.t }));
     const ego = display.nodes.find(n => n.isEgo)?.id;
-    return initLayout(nodes, links, { width: 1600, height: 1100, egoId: ego });
+    return initLayout(nodes, links, { width: 1600, height: 1100, egoId: ego, v2 });
     // Re-init on cluster identity. Force layouts can't be incrementally
     // mutated with new node sets without state surgery; cleaner to rebuild.
-  }, [display.nodes, display.links]);
+  }, [display.nodes, display.links, v2]);
 
   // Resize observer for the canvas container — used for camera fit.
   useEffect(() => {
@@ -592,6 +613,7 @@ export default function Canvas() {
           onNodeClick={onCanvasNodeClick}
           onCanvasClick={clearFocus}
           cameraVersion={camVer}
+          v2={v2}
         />
         <DetailPanel
           node={focusedNode}

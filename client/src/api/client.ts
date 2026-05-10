@@ -178,6 +178,9 @@ export interface ClusterNode {
   claim_id?: string | null;
   confidence?: number | null;
   synthesis_id?: string | null;
+  /** v2 force layout: 768-dim topical signature embedding. Null if the
+   *  TopicalIndex has no entry for this node (e.g. brain predates v2). */
+  topical_vec?: number[] | null;
 }
 
 export interface ClusterEdge {
@@ -206,6 +209,10 @@ export interface LLMSettings {
   configured: boolean;
   unconfigured_reason: string | null;
   env_overrides: string[];
+  /** Canvas redesign feature flag — see CanvasConfig in server/m3/core/config.py.
+   *  When true, the v2 force layout + recency rings replace the radial-by-type
+   *  layout. Default false. */
+  canvas_v2_enabled: boolean;
 }
 
 export interface LocalAgentInfo {
