@@ -47,3 +47,47 @@ def test_write_meta_writes_pretty_json(tmp_brain: Path):
     parsed = json.loads(raw)
     assert parsed["id"] == str(item_id)
     assert "\n  " in raw, "expected pretty-printed JSON with 2-space indent"
+
+
+def test_item_meta_title_round_trips(tmp_brain: Path):
+    import uuid as _u
+    from m3.brain.items import ItemMeta, write_meta, read_meta
+    iid = _u.uuid4()
+    meta = ItemMeta(
+        id=iid, kind="personal", source="test",
+        created_at="2026-01-01T00:00:00Z",
+        original_filename="notes.md",
+        extracted_text="some body",
+        when_iso=None, when_source="ingest_time", hooks={},
+        title="Manoj's notes",
+    )
+    write_meta(tmp_brain, meta)
+    loaded = read_meta(tmp_brain, iid)
+    assert loaded is not None
+    assert loaded.title == "Manoj's notes"
+
+
+def test_item_meta_title_defaults_none_for_legacy_files(tmp_brain: Path):
+    """Existing item meta JSONs without `title` should still load."""
+    import uuid as _u
+    import json
+    from m3.brain.items import read_meta
+    from m3.brain.layout import BrainPaths
+    p = BrainPaths(tmp_brain)
+    p.items_meta.mkdir(parents=True, exist_ok=True)
+    iid = _u.uuid4()
+    legacy = {
+        "id": str(iid),
+        "kind": "personal", "source": "x",
+        "created_at": "2026-01-01T00:00:00Z",
+        "original_filename": None,
+        "extracted_text": "old item",
+        "when_iso": None,
+        "when_source": "unknown",
+        "hooks": {},
+        # NOTE: no `title` field
+    }
+    (p.items_meta / f"{iid}.json").write_text(json.dumps(legacy))
+    loaded = read_meta(tmp_brain, iid)
+    assert loaded is not None
+    assert loaded.title is None
