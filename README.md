@@ -9,12 +9,17 @@ No prescribed structure. No manual organizing. The system learns how you think.
 ## What it does
 
 1. **Capture** via direct upload (text, files) or a Telegram bot.
-2. **Organize** automatically: an LLM extracts entities + facts into plain
-   markdown under `~/brain/`, builds an entity graph, and surfaces a cluster
-   visualization for each query.
-3. **Chat** with your brain — the agent loop searches, opens entities, and
-   cites the underlying items.
-4. **Bring your own AI CLI.** Reuse the `claude`, `codex`, `gemini`, `aider`,
+2. **Organize** automatically: an LLM extracts entities, items, atomic claims,
+   and per-entity syntheses into plain markdown under `~/brain/`. Each claim
+   gets a short interpretive headline; each item gets a clean title parsed
+   from frontmatter / H1 / first line.
+3. **Visualize** as a topical force-layout canvas with concentric recency
+   rings — the center is "now," older notes drift outward, topically similar
+   things cluster together. Claims render as collapsed pills that expand
+   inline to readable cards on click.
+4. **Chat** with your brain — the agent loop searches, opens entities, and
+   cites the underlying items; citations highlight live on the canvas.
+5. **Bring your own AI CLI.** Reuse the `claude`, `codex`, `gemini`, `aider`,
    `mods`, or `llm` CLI you already have logged in. No M3-managed API key.
 
 ## Architecture
@@ -87,6 +92,25 @@ For source builds:
 ```
 
 That pulls the latest commits, rebuilds the m3 wheel into `src-tauri/resources/`, rebuilds the frontend, and rebuilds the desktop app. Your data at `~/brain/` is untouched across any update path.
+
+### Backfill commands for upgrading brains
+
+A new release sometimes adds derived fields the LLM emits on fresh ingest but
+that older brains don't have yet (claim headlines, item titles, topical
+signature embeddings, etc). The `m3 reindex` CLI fills these in retroactively
+without re-running the full extract pipeline. Run inside the bundled venv
+(`~/Library/Application Support/local.m3.app/runtime/venv/bin/m3` on macOS):
+
+```bash
+m3 reindex --topical    # per-node embeddings used by the canvas v2 force layout
+m3 reindex --labels     # item titles (deterministic) + claim headlines (one LLM call per claim)
+```
+
+Both commands are idempotent — re-running skips records that already have the
+fields populated. Per-record errors are collected and reported at the end; one
+bad embedding doesn't abort the walk. New captures get the fields automatically
+on ingest, so backfill is optional and mostly a one-time step after a major
+upgrade.
 
 ## Configuration
 
@@ -164,13 +188,16 @@ The auto-updater is wired up. The signing pubkey lives in [src-tauri/tauri.conf.
 
 **Per release**
 
-1. Bump the version in [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) and [server/pyproject.toml](server/pyproject.toml).
+1. Bump the version in three files (kept in sync — CI doesn't enforce):
+   - [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) — `"version"`
+   - [src-tauri/Cargo.toml](src-tauri/Cargo.toml) — `[package].version`
+   - [server/pyproject.toml](server/pyproject.toml) — `[project].version`
 2. Commit, then tag:
    ```bash
-   git tag v0.1.1 && git push origin v0.1.1
+   git tag v0.2.0 && git push origin v0.2.0
    ```
-3. The release workflow runs on macOS (Apple Silicon) and Linux x86_64, builds the m3 wheel, the React bundle, and the signed Tauri update artifacts, then uploads them as a **draft GitHub Release**.
-4. Review the draft at the repo's Releases page and hit **Publish**. Existing installs see the new version on next launch via the updater banner.
+3. The release workflow runs on macOS (Apple Silicon) and Linux x86_64, builds the m3 wheel, the React bundle, and the signed Tauri update artifacts, then uploads them as a **draft GitHub Release**. It also auto-opens a PR (`cask-bump-vX.Y.Z`) updating [Casks/m3.rb](Casks/m3.rb) with the new version + sha256 of the freshly built `.dmg` — one-click merge to keep the Homebrew tap in sync.
+4. Review the draft at the repo's Releases page, add release notes, and hit **Publish**. Existing installs see the new version on next launch via the updater banner. Merge the cask-bump PR so `brew install --cask` resolves to the new version.
 
 If you ever need to test the workflow without cutting a real release, trigger it manually from the Actions tab (`workflow_dispatch`) — it'll still produce a draft Release that you can delete after verifying.
 
