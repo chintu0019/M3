@@ -98,16 +98,6 @@ const V2_COOL_FRAMES = 600;    // ~10s at 60Hz
 const V2_COOL_FLOOR  = 0.05;   // residual breathing once cool
 const V2_REHEAT_ON_DRAG = 200; // frames of warmth restored when a drag starts
 
-// Deterministic angle in [0, 2π) from a node id, so v2 layout is stable
-// across reloads even before forces settle.
-function idAngleHash(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) {
-    h = (h * 31 + id.charCodeAt(i)) | 0;
-  }
-  return ((h >>> 0) / 0xffffffff) * Math.PI * 2;
-}
-
 /**
  * Preferred radius from the ego per node category. Pulls each node onto a
  * concentric ring around (cx, cy) so the canvas reads as "you at the centre,
@@ -210,12 +200,21 @@ export function initLayout(
 
   if (v2) {
     // v2: each node gets a target radius from its when_iso (recency band)
-    // and a deterministic id-hashed initial angle. Topical attraction +
+    // and a deterministic even-spread initial angle. Topical attraction +
     // repulsion + link springs then refine angular position over the next
     // ~500 frames.
+    //
+    // Sort node IDs and slot them evenly around the circle so the initial
+    // layout has uniform angular distribution regardless of ID string biases
+    // (claim:<uuid>, entity:<slug> etc share prefixes that pollute hashes).
+    const sortedIds = [...nodes].map(n => n.id).sort();
+    const angleByid = new Map<string, number>();
+    for (let i = 0; i < sortedIds.length; i++) {
+      angleByid.set(sortedIds[i], (i / sortedIds.length) * Math.PI * 2);
+    }
     for (const n of nodes) {
       const r = recencyRadiusFor(n.whenIso ?? null);
-      const angle = idAngleHash(n.id);
+      const angle = angleByid.get(n.id) ?? 0;
       slotXY.set(n.id, { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
       angleOf.set(n.id, angle);
     }
@@ -481,16 +480,37 @@ export function initLayout(
         a.vx -= (dx / d) * fr; a.vy -= (dy / d) * fr;
         b.vx += (dx / d) * fr; b.vy += (dy / d) * fr;
 
-        // Topical attraction (only above threshold). Distance term capped at
-        // 200 so topically-similar nodes on opposite recency rings can't
-        // ratchet each other across bands — topical now acts as ring-band
-        // cohesion, not a long-range pull that overrides recency.
+        // Topical attraction (only above threshold) — tangential to each
+        // node's recency ring. Two topically-similar nodes on different
+        // bands shift along their OWN rings toward each other angularly
+        // rather than dragging each other radially across rings. Recency
+        // owns the radial axis; topical owns the angular axis.
         const vb = topicalVecs[j];
         const sim = topicalSimilarity(va, vb);
         if (sim >= V2_SIM_THRESHOLD) {
           const fa = sim * V2_TOPICAL_K * Math.min(d, 200) * temp;
-          a.vx += (dx / d) * fa; a.vy += (dy / d) * fa;
-          b.vx -= (dx / d) * fa; b.vy -= (dy / d) * fa;
+          // Direction from a to b (a should move toward b, b toward a)
+          const ux = dx / d;
+          const uy = dy / d;
+          // Tangent at A: perpendicular to radial direction (a - center)
+          const radAx = a.x - cx;
+          const radAy = a.y - cy;
+          const radAlen = Math.hypot(radAx, radAy) || 1;
+          const tanAx = -radAy / radAlen;
+          const tanAy = radAx / radAlen;
+          // Tangent at B
+          const radBx = b.x - cx;
+          const radBy = b.y - cy;
+          const radBlen = Math.hypot(radBx, radBy) || 1;
+          const tanBx = -radBy / radBlen;
+          const tanBy = radBx / radBlen;
+          // Project (ux, uy) onto each tangent (signed magnitude)
+          const projA = ux * tanAx + uy * tanAy;
+          const projB = ux * tanBx + uy * tanBy;
+          a.vx += tanAx * projA * fa;
+          a.vy += tanAy * projA * fa;
+          b.vx -= tanBx * projB * fa;
+          b.vy -= tanBy * projB * fa;
         }
       }
     }
