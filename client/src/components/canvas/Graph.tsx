@@ -39,12 +39,17 @@ export interface GraphProps {
   onCanvasClick?: () => void;
   /** Bumps when camera changes — React re-renders so the transform style updates. */
   cameraVersion: number;
+  /** Canvas v2 mode: concentric recency rings + no pinned ego + multi-resolution
+   *  zoom gating on nodes (handled in NodeMark). When false (default), the
+   *  existing radial-by-type layout renders unchanged. */
+  v2?: boolean;
 }
 
 export function Graph({
   layout, nodes, links, variant, showHulls,
   highlighted, preHighlighted, pulseId, flowEdges,
   cameraRef, onCamera, onNodeClick, onCanvasClick, cameraVersion: _cameraVersion,
+  v2 = false,
 }: GraphProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -213,40 +218,76 @@ export function Graph({
           {/* Concentric ring guides at the radial bands. Drawn first so
             * everything else (edges, nodes) sits on top. Faint enough to
             * read as orientation, not as content. */}
-          {showHulls && (() => {
-            const ego = layout.state.find(s => s.pinned);
-            if (!ego) return null;
-            const stroke = variant === "cosmos" ? "oklch(0.45 0.01 260 / 0.18)" : "oklch(0.45 0.01 260 / 0.28)";
-            const labelFill = "oklch(0.5 0.01 260 / 0.6)";
-            const rings = [
-              { r: 230, label: "syntheses" },
-              { r: 380, label: "entities" },
-              { r: 560, label: "claims" },
+          {v2 ? (() => {
+            // Canvas v2: concentric recency rings centered on the canvas.
+            // Replaces the radial-by-type guides; the center is "now," outer
+            // rings are older. Radii match the forceLayout v2 targets.
+            const cx = layout.width / 2;
+            const cy = layout.height / 2;
+            const labelFill = "oklch(0.55 0.02 260 / 0.6)";
+            const rings: { r: number; label: string; alpha: number }[] = [
+              { r: 140, label: "THIS WEEK",    alpha: 0.70 },
+              { r: 260, label: "THIS MONTH",   alpha: 0.40 },
+              { r: 420, label: "THIS QUARTER", alpha: 0.22 },
+              { r: 600, label: "EARLIER",      alpha: 0.13 },
             ];
             return rings.map(ring => (
               <g key={ring.r}>
                 <circle
-                  cx={ego.x}
-                  cy={ego.y}
-                  r={ring.r}
+                  cx={cx} cy={cy} r={ring.r}
                   fill="none"
-                  stroke={stroke}
+                  stroke={`oklch(0.5 0.02 260 / ${ring.alpha})`}
                   strokeDasharray="3 6"
                   strokeWidth={1}
                 />
                 <text
-                  x={ego.x + 6}
-                  y={ego.y - ring.r - 6}
+                  x={cx} y={cy - ring.r - 6}
                   fill={labelFill}
                   fontFamily="'JetBrains Mono', monospace"
-                  fontSize="10"
-                  style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
+                  fontSize="9"
+                  textAnchor="middle"
+                  style={{ letterSpacing: "0.18em", textTransform: "uppercase" }}
                 >
                   {ring.label}
                 </text>
               </g>
             ));
-          })()}
+          })() : (
+            showHulls && (() => {
+              const ego = layout.state.find(s => s.pinned);
+              if (!ego) return null;
+              const stroke = variant === "cosmos" ? "oklch(0.45 0.01 260 / 0.18)" : "oklch(0.45 0.01 260 / 0.28)";
+              const labelFill = "oklch(0.5 0.01 260 / 0.6)";
+              const rings = [
+                { r: 230, label: "syntheses" },
+                { r: 380, label: "entities" },
+                { r: 560, label: "claims" },
+              ];
+              return rings.map(ring => (
+                <g key={ring.r}>
+                  <circle
+                    cx={ego.x}
+                    cy={ego.y}
+                    r={ring.r}
+                    fill="none"
+                    stroke={stroke}
+                    strokeDasharray="3 6"
+                    strokeWidth={1}
+                  />
+                  <text
+                    x={ego.x + 6}
+                    y={ego.y - ring.r - 6}
+                    fill={labelFill}
+                    fontFamily="'JetBrains Mono', monospace"
+                    fontSize="10"
+                    style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
+                  >
+                    {ring.label}
+                  </text>
+                </g>
+              ));
+            })()
+          )}
 
           {/* Edges */}
           {links.map((l, i) => {
@@ -309,9 +350,11 @@ export function Graph({
             );
           })}
 
-          {/* Nodes — render ego last so it sits on top */}
+          {/* Nodes — render ego last so it sits on top. In v2, ego is
+            * suppressed entirely (center is "now," not "you"). */}
           {[...layout.state]
             .sort((a, b) => Number(nodeById.get(a.id)?.isEgo ?? false) - Number(nodeById.get(b.id)?.isEgo ?? false))
+            .filter(s => !v2 || !nodeById.get(s.id)?.isEgo)
             .map(s => {
               const n = nodeById.get(s.id);
               if (!n) return null;
@@ -334,6 +377,8 @@ export function Graph({
                   pulse={pulse}
                   showLabel={lodLabel}
                   showCard={lodCard}
+                  v2={v2}
+                  zoomK={cam.k}
                 />
               );
             })}

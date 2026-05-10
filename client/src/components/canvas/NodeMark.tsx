@@ -34,6 +34,13 @@ export interface NodeMarkProps {
   pulse: boolean;       // pulsing right now (just got cited)
   showLabel: boolean;   // zoom is high enough to label
   showCard: boolean;    // zoom is high enough for the detail card
+  /** Canvas v2 mode flag. When true, NodeMark applies multi-resolution
+   *  zoom gating using `zoomK`. Behavior lands in Task 12; the prop is
+   *  declared here so Graph.tsx can forward it without TS errors. */
+  v2?: boolean;
+  /** Current camera zoom (cam.k). Used by v2 mode for resolution-based
+   *  rendering decisions. Forwarded from Graph.tsx. */
+  zoomK?: number;
 }
 
 export function NodeMark({
