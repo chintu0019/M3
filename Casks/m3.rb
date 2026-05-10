@@ -7,8 +7,8 @@
 #   brew install --cask m3
 
 cask "m3" do
-  version "0.1.3"
-  sha256 "585c8bb03c164fb6dc437793096657d4ca4812acb79134cebf441c7f52354918"
+  version "0.1.4"
+  sha256 "d1c42841016aa5be787798779eabf5a1b3bec5197418fef0d3546c90ed4fea39"
 
   url "https://github.com/chintu0019/M3/releases/download/v#{version}/M3_#{version}_aarch64.dmg"
   name "M3"
