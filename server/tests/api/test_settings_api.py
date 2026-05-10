@@ -79,3 +79,39 @@ def test_put_rejects_unknown_provider(app):
     c = TestClient(app)
     r = c.put("/api/v1/settings", json={"provider": "gpt5"})
     assert r.status_code == 422
+
+
+def test_settings_get_includes_canvas_v2(app, monkeypatch):
+    """canvas_v2_enabled is reported alongside the existing LLM fields."""
+    monkeypatch.delenv("M3_CANVAS_V2", raising=False)
+    c = TestClient(app)
+    response = c.get("/api/v1/settings")
+    assert response.status_code == 200
+    body = response.json()
+    assert "canvas_v2_enabled" in body
+    assert body["canvas_v2_enabled"] is False
+
+
+def test_settings_put_can_toggle_canvas_v2(app, monkeypatch):
+    monkeypatch.delenv("M3_CANVAS_V2", raising=False)
+    c = TestClient(app)
+    r = c.put("/api/v1/settings", json={"canvas_v2_enabled": True})
+    assert r.status_code == 200
+    assert r.json()["canvas_v2_enabled"] is True
+    r2 = c.get("/api/v1/settings")
+    assert r2.json()["canvas_v2_enabled"] is True
+
+
+def test_settings_put_canvas_v2_independent_of_llm_fields(app, monkeypatch):
+    """Setting canvas_v2 alone must not clear or alter LLM settings."""
+    monkeypatch.delenv("M3_CANVAS_V2", raising=False)
+    c = TestClient(app)
+    # First set an LLM field to something distinct.
+    r = c.put("/api/v1/settings", json={"ollama_model": "qwen2.5:14b"})
+    assert r.status_code == 200
+    # Now toggle canvas_v2 — ollama_model must survive.
+    r2 = c.put("/api/v1/settings", json={"canvas_v2_enabled": True})
+    assert r2.status_code == 200
+    body = r2.json()
+    assert body["ollama_model"] == "qwen2.5:14b"
+    assert body["canvas_v2_enabled"] is True
