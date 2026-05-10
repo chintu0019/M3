@@ -91,3 +91,46 @@ def test_read_claim_with_corrupt_frontmatter_returns_none(tmp_brain: Path):
     cid = uuid.uuid4()
     (p / f"{cid}.md").write_text("not even close to valid frontmatter\n")
     assert read_claim(tmp_brain, cid) is None
+
+
+def test_claim_meta_headline_round_trips(tmp_brain: Path):
+    import uuid as _u
+    from m3.brain.claims import ClaimMeta, write_claim, read_claim
+    cid = _u.uuid4()
+    meta = ClaimMeta(
+        id=cid, item_id=_u.uuid4(),
+        proposition="Manoj has been the CTO of three startups.",
+        confidence=0.8, supporting_span="...",
+        headline="Long CTO tenure",
+    )
+    write_claim(tmp_brain, meta)
+    loaded = read_claim(tmp_brain, cid)
+    assert loaded is not None
+    assert loaded.headline == "Long CTO tenure"
+
+
+def test_claim_meta_headline_defaults_empty_for_legacy_files(tmp_brain: Path):
+    """Existing claim files written before this field should still load."""
+    import uuid as _u
+    import json
+    from m3.brain.claims import read_claim
+    from m3.brain.layout import BrainPaths
+    p = BrainPaths(tmp_brain)
+    p.claims_dir.mkdir(parents=True, exist_ok=True)
+    cid = _u.uuid4()
+    legacy_frontmatter = {
+        "id": str(cid),
+        "item_id": str(_u.uuid4()),
+        "proposition": "legacy claim",
+        "confidence": 0.5,
+        "supporting_span": "...",
+        "entity_slugs": [],
+        "created_at": "",
+        # NOTE: no `headline` field
+    }
+    (p.claims_dir / f"{cid}.md").write_text(
+        "---\n" + json.dumps(legacy_frontmatter, indent=2) + "\n---\n\nlegacy claim\n"
+    )
+    loaded = read_claim(tmp_brain, cid)
+    assert loaded is not None
+    assert loaded.headline == ""

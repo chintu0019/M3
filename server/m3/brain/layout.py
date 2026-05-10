@@ -49,6 +49,8 @@ class BrainPaths:
     @property
     def vectors_db(self) -> Path: return self.index_dir / "vectors.sqlite"
     @property
+    def topical_db(self) -> Path: return self.index_dir / "topical.sqlite"
+    @property
     def config_yml(self) -> Path: return self.root / "config.yml"
 
     def entity_path(self, slug: str) -> Path:

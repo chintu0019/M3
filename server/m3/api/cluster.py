@@ -29,6 +29,10 @@ class NodeModel(BaseModel):
     claim_id: str | None = None
     confidence: float | None = None
     synthesis_id: str | None = None
+    topical_vec: list[float] | None = None
+    headline: str | None = None
+    title: str | None = None
+    proposition: str | None = None
 
 
 class EdgeModel(BaseModel):

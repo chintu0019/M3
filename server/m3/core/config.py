@@ -73,10 +73,17 @@ class AuthConfig:
 
 
 @dataclass
+class CanvasConfig:
+    """Canvas redesign feature flag — see docs/superpowers/specs/2026-05-10-canvas-redesign-design.md."""
+    v2: bool = False
+
+
+@dataclass
 class M3Config:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    canvas: CanvasConfig = field(default_factory=CanvasConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +108,9 @@ class M3Config:
             "auth": {
                 "require_auth": self.auth.require_auth,
                 "api_key": self.auth.api_key,
+            },
+            "canvas": {
+                "v2": self.canvas.v2,
             },
         }
 
@@ -153,6 +163,9 @@ def load() -> M3Config:
     auth_raw = raw.get("auth") or {}
     if not isinstance(auth_raw, dict):
         auth_raw = {}
+    canvas_raw = raw.get("canvas") or {}
+    if not isinstance(canvas_raw, dict):
+        canvas_raw = {}
     return M3Config(
         telegram=TelegramConfig(
             token=_str_or_none(tg.get("token")),
@@ -171,6 +184,9 @@ def load() -> M3Config:
         auth=AuthConfig(
             require_auth=bool(auth_raw.get("require_auth", False)),
             api_key=_str_or_none(auth_raw.get("api_key")),
+        ),
+        canvas=CanvasConfig(
+            v2=bool(canvas_raw.get("v2", False)),
         ),
     )
 
@@ -302,3 +318,11 @@ def auth_required() -> bool:
 def auth_api_key() -> str | None:
     """The configured API key (env > config.yml), or None."""
     return os.environ.get("M3_API_KEY") or load().auth.api_key
+
+
+def canvas_v2_enabled() -> bool:
+    """Env > config.yml > default. M3_CANVAS_V2 accepts truthy strings."""
+    env = os.environ.get("M3_CANVAS_V2")
+    if env is not None:
+        return env.strip().lower() in {"1", "true", "yes", "on"}
+    return load().canvas.v2

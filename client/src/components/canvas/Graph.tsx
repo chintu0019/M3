@@ -39,12 +39,23 @@ export interface GraphProps {
   onCanvasClick?: () => void;
   /** Bumps when camera changes — React re-renders so the transform style updates. */
   cameraVersion: number;
+  /** Canvas v2 mode: concentric recency rings + no pinned ego + multi-resolution
+   *  zoom gating on nodes (handled in NodeMark). When false (default), the
+   *  existing radial-by-type layout renders unchanged. */
+  v2?: boolean;
+  /** Canvas v2: id of the currently expanded claim card (or null). Forwarded
+   *  to NodeMark so the matching pill renders an attached ClaimCard. */
+  expandedClaimId?: string | null;
+  /** Canvas v2: invoked from a claim pill click. Canvas owns the toggle so
+   *  only one card can be open at a time. */
+  onClaimToggle?: (id: string) => void;
 }
 
 export function Graph({
   layout, nodes, links, variant, showHulls,
   highlighted, preHighlighted, pulseId, flowEdges,
   cameraRef, onCamera, onNodeClick, onCanvasClick, cameraVersion: _cameraVersion,
+  v2 = false, expandedClaimId = null, onClaimToggle,
 }: GraphProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -174,6 +185,18 @@ export function Graph({
 
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
 
+  // 1-hop neighbors of the expanded claim — they form the contextual halo and
+  // stay bright while everything else dims hard.
+  const haloIds = useMemo(() => {
+    if (!expandedClaimId) return new Set<string>();
+    const set = new Set<string>([expandedClaimId]);
+    for (const l of links) {
+      if (l.s === expandedClaimId) set.add(l.t);
+      if (l.t === expandedClaimId) set.add(l.s);
+    }
+    return set;
+  }, [expandedClaimId, links]);
+
   // hulls were used by the old force-directed layout to outline category
   // clusters — redundant now that nodes are deterministically slotted on
   // labeled rings.
@@ -213,40 +236,76 @@ export function Graph({
           {/* Concentric ring guides at the radial bands. Drawn first so
             * everything else (edges, nodes) sits on top. Faint enough to
             * read as orientation, not as content. */}
-          {showHulls && (() => {
-            const ego = layout.state.find(s => s.pinned);
-            if (!ego) return null;
-            const stroke = variant === "cosmos" ? "oklch(0.45 0.01 260 / 0.18)" : "oklch(0.45 0.01 260 / 0.28)";
-            const labelFill = "oklch(0.5 0.01 260 / 0.6)";
-            const rings = [
-              { r: 230, label: "syntheses" },
-              { r: 380, label: "entities" },
-              { r: 560, label: "claims" },
+          {v2 ? (() => {
+            // Canvas v2: concentric recency rings centered on the canvas.
+            // Replaces the radial-by-type guides; the center is "now," outer
+            // rings are older. Radii match the forceLayout v2 targets.
+            const cx = layout.width / 2;
+            const cy = layout.height / 2;
+            const labelFill = "oklch(0.55 0.02 260 / 0.6)";
+            const rings: { r: number; label: string; alpha: number }[] = [
+              { r: 140, label: "THIS WEEK",    alpha: 0.70 },
+              { r: 260, label: "THIS MONTH",   alpha: 0.40 },
+              { r: 420, label: "THIS QUARTER", alpha: 0.22 },
+              { r: 600, label: "EARLIER",      alpha: 0.13 },
             ];
             return rings.map(ring => (
               <g key={ring.r}>
                 <circle
-                  cx={ego.x}
-                  cy={ego.y}
-                  r={ring.r}
+                  cx={cx} cy={cy} r={ring.r}
                   fill="none"
-                  stroke={stroke}
+                  stroke={`oklch(0.5 0.02 260 / ${ring.alpha})`}
                   strokeDasharray="3 6"
                   strokeWidth={1}
                 />
                 <text
-                  x={ego.x + 6}
-                  y={ego.y - ring.r - 6}
+                  x={cx} y={cy - ring.r - 6}
                   fill={labelFill}
                   fontFamily="'JetBrains Mono', monospace"
-                  fontSize="10"
-                  style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
+                  fontSize="9"
+                  textAnchor="middle"
+                  style={{ letterSpacing: "0.18em", textTransform: "uppercase" }}
                 >
                   {ring.label}
                 </text>
               </g>
             ));
-          })()}
+          })() : (
+            showHulls && (() => {
+              const ego = layout.state.find(s => s.pinned);
+              if (!ego) return null;
+              const stroke = variant === "cosmos" ? "oklch(0.45 0.01 260 / 0.18)" : "oklch(0.45 0.01 260 / 0.28)";
+              const labelFill = "oklch(0.5 0.01 260 / 0.6)";
+              const rings = [
+                { r: 230, label: "syntheses" },
+                { r: 380, label: "entities" },
+                { r: 560, label: "claims" },
+              ];
+              return rings.map(ring => (
+                <g key={ring.r}>
+                  <circle
+                    cx={ego.x}
+                    cy={ego.y}
+                    r={ring.r}
+                    fill="none"
+                    stroke={stroke}
+                    strokeDasharray="3 6"
+                    strokeWidth={1}
+                  />
+                  <text
+                    x={ego.x + 6}
+                    y={ego.y - ring.r - 6}
+                    fill={labelFill}
+                    fontFamily="'JetBrains Mono', monospace"
+                    fontSize="10"
+                    style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
+                  >
+                    {ring.label}
+                  </text>
+                </g>
+              ));
+            })()
+          )}
 
           {/* Edges */}
           {links.map((l, i) => {
@@ -254,7 +313,13 @@ export function Graph({
             const b = layout.byId.get(l.t);
             if (!a || !b) return null;
             const isHL = hasHL && highlighted.has(l.s) && highlighted.has(l.t);
-            const dim = hasHL && !isHL;
+            let dim = hasHL && !isHL;
+            // Expanded-claim focus: keep edges between halo members bright,
+            // dim every other edge hard so the halo subgraph reads clearly.
+            if (expandedClaimId) {
+              const involvesExpanded = haloIds.has(l.s) && haloIds.has(l.t);
+              dim = !involvesExpanded;
+            }
             const key = `${l.s}→${l.t}`;
             const isFlowing = flowEdges.has(key);
             // At rest, edges are barely visible (alpha 0.12) so the canvas
@@ -309,14 +374,43 @@ export function Graph({
             );
           })}
 
-          {/* Nodes — render ego last so it sits on top */}
+          {/* Nodes — render ego last so it sits on top, and the expanded
+            * claim card (if any) last of all so its <foreignObject> paints
+            * over every other pill. SVG has no z-index — document order is
+            * paint order — so the only way to keep the open card on top is
+            * to sort its <g> to the end of the list. In v2, ego is
+            * suppressed entirely (center is "now," not "you"). */}
           {[...layout.state]
-            .sort((a, b) => Number(nodeById.get(a.id)?.isEgo ?? false) - Number(nodeById.get(b.id)?.isEgo ?? false))
+            .sort((a, b) => {
+              const aExpanded = expandedClaimId === a.id ? 1 : 0;
+              const bExpanded = expandedClaimId === b.id ? 1 : 0;
+              if (aExpanded !== bExpanded) return aExpanded - bExpanded;
+              return Number(nodeById.get(a.id)?.isEgo ?? false) - Number(nodeById.get(b.id)?.isEgo ?? false);
+            })
+            .filter(s => !v2 || !nodeById.get(s.id)?.isEgo)
             .map(s => {
               const n = nodeById.get(s.id);
               if (!n) return null;
               const hl = hasHL && highlighted.has(s.id);
-              const dim = hasHL && !hl;
+              let dim = hasHL && !hl;
+              let hlFinal = hl;
+              // Expanded-claim focus: keep expanded + 1-hop neighbors bright,
+              // dim the rest. Suppress chat-highlight on non-halo nodes during
+              // expansion to avoid a "dimmed but bright" tug-of-war between
+              // two focus systems.
+              if (expandedClaimId) {
+                const inHalo = haloIds.has(s.id);
+                if (!inHalo) {
+                  dim = true;
+                  hlFinal = false;
+                } else if (s.id === expandedClaimId) {
+                  dim = false;
+                  hlFinal = true;
+                } else {
+                  // 1-hop neighbor: bright but not hl-treated (subtle, not loud)
+                  dim = false;
+                }
+              }
               const pre = preHighlighted.has(s.id);
               const pulse = pulseId === s.id;
               const r = n.isEgo ? 32 : 8 + Math.sqrt(s.degree) * 3;
@@ -328,12 +422,16 @@ export function Graph({
                   y={s.y}
                   radius={r}
                   variant={variant}
-                  hl={hl}
+                  hl={hlFinal}
                   dim={dim}
                   pre={pre}
                   pulse={pulse}
                   showLabel={lodLabel}
                   showCard={lodCard}
+                  v2={v2}
+                  zoomK={cam.k}
+                  expanded={expandedClaimId === s.id}
+                  onClaimToggle={onClaimToggle}
                 />
               );
             })}

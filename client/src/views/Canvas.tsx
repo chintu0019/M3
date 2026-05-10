@@ -25,10 +25,9 @@ import { Graph, type GraphLink } from "../components/canvas/Graph";
 import { Legend } from "../components/canvas/Legend";
 import { SettingsModal } from "../components/canvas/SettingsModal";
 import { Toolbar } from "../components/canvas/Toolbar";
-import type { Variant } from "../components/canvas/NodeMark";
+import { type DisplayNode, type Variant } from "../components/canvas/NodeMark";
 import {
   deriveCategory,
-  type Category,
   type LinkKind,
 } from "../lib/canvasColors";
 import {
@@ -36,17 +35,8 @@ import {
   type Layout,
   type LayoutLink,
   type LayoutNode,
+  type PrevPositions,
 } from "../lib/forceLayout";
-
-type DisplayNode = {
-  id: string;
-  label: string;
-  cat: Category;
-  isEgo: boolean;
-  excerpt: string | null;
-  itemId: string | null;
-  sources?: number;
-};
 
 const SUGGESTIONS = [
   "What did I capture about portfolio?",
@@ -120,6 +110,10 @@ export default function Canvas() {
   // canvas background or hit Esc to clear.
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
 
+  // Currently expanded claim node (canvas v2). Lives here so only one card
+  // can be open at a time; ESC and canvas-click both clear it.
+  const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
+
   const cameraRef = useRef({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number | null>(null);
@@ -141,6 +135,15 @@ export default function Canvas() {
       api.settings().then(setSettings).catch(() => {});
     }
   }, [settingsOpen]);
+
+  // Canvas v2 feature flag. localStorage dev override takes precedence so a
+  // developer can flip v2 on without round-tripping through the settings API.
+  const v2 = useMemo<boolean>(() => {
+    if (typeof window !== "undefined" && window.localStorage.getItem("m3_canvas_v2") === "1") {
+      return true;
+    }
+    return !!settings?.canvas_v2_enabled;
+  }, [settings]);
 
   // Derive display nodes/edges from the cluster response. Memoized so we don't
   // rebuild the layout every render — only when the cluster identity or the
@@ -208,6 +211,10 @@ export default function Canvas() {
         excerpt: n.excerpt,
         itemId: n.item_id,
         sources: n.type === "entity" ? sourcesByEntity.get(n.id) : undefined,
+        whenIso: n.when_iso ?? null,
+        topicalVec: n.topical_vec ?? null,
+        proposition: n.proposition ?? null,
+        confidence: n.confidence ?? null,
       });
     }
 
@@ -227,14 +234,39 @@ export default function Canvas() {
     return { nodes, links };
   }, [cluster, showAllSources, showAllClaims, expandedEntities]);
 
+  // Carries the previous layout's per-node x/y/vx/vy across rebuilds so a
+  // click that reveals a few extra claim/item nodes doesn't snap every other
+  // node back to its id-hash slot. We can't reach into a useMemo's previous
+  // value directly, so we stash it in a ref the moment the previous layout
+  // is replaced.
+  const prevLayoutRef = useRef<Layout | null>(null);
+
   const layout = useMemo<Layout>(() => {
-    const nodes: LayoutNode[] = display.nodes.map(n => ({ id: n.id, cat: n.cat }));
+    const nodes: LayoutNode[] = display.nodes.map(n => ({
+      id: n.id, cat: n.cat,
+      whenIso: n.whenIso ?? null,
+      topicalVec: n.topicalVec ?? null,
+    }));
     const links: LayoutLink[] = display.links.map(l => ({ s: l.s, t: l.t }));
     const ego = display.nodes.find(n => n.isEgo)?.id;
-    return initLayout(nodes, links, { width: 1600, height: 1100, egoId: ego });
+    // Snapshot any still-living node from the previous layout. Brand-new node
+    // ids fall through to the slotter and pick up an id-hash slot; everything
+    // else carries over its current screen position.
+    let prev: PrevPositions | undefined;
+    const prevLayout = prevLayoutRef.current;
+    if (prevLayout && prevLayout.state.length > 0) {
+      prev = new Map();
+      for (const s of prevLayout.state) {
+        prev.set(s.id, { x: s.x, y: s.y, vx: s.vx, vy: s.vy });
+      }
+    }
+    const next = initLayout(nodes, links, { width: 1600, height: 1100, egoId: ego, v2, prev });
+    prevLayoutRef.current = next;
+    return next;
     // Re-init on cluster identity. Force layouts can't be incrementally
-    // mutated with new node sets without state surgery; cleaner to rebuild.
-  }, [display.nodes, display.links]);
+    // mutated with new node sets without state surgery; cleaner to rebuild
+    // and let the position carry-over keep continuity.
+  }, [display.nodes, display.links, v2]);
 
   // Resize observer for the canvas container — used for camera fit.
   useEffect(() => {
@@ -260,12 +292,18 @@ export default function Canvas() {
     return () => cancelAnimationFrame(raf);
   }, [layout]);
 
-  // Initial fit when layout + viewport are ready. Centred on the ego (You),
-  // not on the bounding-box midpoint — otherwise an asymmetric set of nodes
-  // pulls the focal point off-centre and the user's "I am the centre" gets
-  // visually relocated to a corner.
+  // One-shot initial fit: centre the camera on the ego (or fit-all in v2)
+  // the first time a non-empty layout + a real viewport size meet. Crucially
+  // we only do this ONCE — every click that toggles entity expansion rebuilds
+  // `layout`, and re-running this effect on each rebuild was animating the
+  // camera back to the bounding-box centre on every click. That was the
+  // "clicking anything resets the zoom and moves everything" behaviour the
+  // user reported.
+  const didInitialFitRef = useRef(false);
   useEffect(() => {
+    if (didInitialFitRef.current) return;
     if (viewSize.w < 10 || layout.state.length === 0) return;
+    didInitialFitRef.current = true;
     const ego = layout.state.find(s => s.pinned);
     let extentR = 0;
     if (ego) {
@@ -382,11 +420,25 @@ export default function Canvas() {
   }, [layout, viewSize.w, viewSize.h, display.links]);
 
   const clearFocus = useCallback(() => {
-    setFocusedNodeId(null);
-    setHighlighted(new Set());
-    setExpandedEntities(new Set());
+    // Idempotent on an already-cleared canvas. Without these guards, every
+    // empty-canvas click was triggering setExpandedEntities(new Set()) — which
+    // changed `display`'s identity and rebuilt the layout. The position
+    // carry-over keeps surviving nodes in place, but skipping the no-op state
+    // writes is cheaper and removes a per-click flicker.
+    let didAnything = false;
+    setFocusedNodeId(curr => { if (curr) didAnything = true; return null; });
+    setHighlighted(curr => { if (curr.size) didAnything = true; return curr.size ? new Set() : curr; });
+    setExpandedEntities(curr => {
+      if (curr.size === 0) return curr;
+      didAnything = true;
+      return new Set();
+    });
+    if (!didAnything) return;
     // Recenter the camera on You. The focus animation moves the camera off
-    // ego when the user explores; clearing focus should put them back.
+    // ego when the user explores; clearing focus should put them back. v2 has
+    // no pinned ego (the centre is "now", not "you"), so the recenter is
+    // skipped on v2 — clicking the background just clears focus, no camera
+    // move.
     const ego = layout.state.find(s => s.pinned);
     if (ego && viewSize.w >= 10) {
       let extentR = 0;
@@ -408,7 +460,10 @@ export default function Canvas() {
   // matter where the user clicked last.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") clearFocus();
+      if (e.key === "Escape") {
+        clearFocus();
+        setExpandedClaimId(null);
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -590,8 +645,16 @@ export default function Canvas() {
           cameraRef={cameraRef}
           onCamera={bumpCam}
           onNodeClick={onCanvasNodeClick}
-          onCanvasClick={clearFocus}
+          onCanvasClick={() => {
+            clearFocus();
+            setExpandedClaimId(null);
+          }}
           cameraVersion={camVer}
+          v2={v2}
+          expandedClaimId={expandedClaimId}
+          onClaimToggle={(id: string) =>
+            setExpandedClaimId(prev => (prev === id ? null : id))
+          }
         />
         <DetailPanel
           node={focusedNode}

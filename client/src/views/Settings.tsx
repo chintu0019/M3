@@ -286,6 +286,27 @@ export default function Settings() {
 
       <section className="m3-settings__section">
         <header className="m3-settings__head">
+          <h2>Canvas</h2>
+          <span className="m3-settings__head-tag">{s.canvas_v2_enabled ? "v2 preview" : "v1"}</span>
+        </header>
+        <p className="m3-settings__hint">
+          Canvas v2 replaces the radial-by-type layout with a topical force
+          layout and concentric recency rings. Reload the canvas after
+          toggling to see the change.
+        </p>
+        <label className="m3-settings__toggle-row">
+          <input
+            type="checkbox"
+            checked={s.canvas_v2_enabled}
+            onChange={e => save({ canvas_v2_enabled: e.target.checked })}
+            disabled={saving}
+          />
+          <span>Canvas v2 (preview)</span>
+        </label>
+      </section>
+
+      <section className="m3-settings__section">
+        <header className="m3-settings__head">
           <h2>About</h2>
           <span className="m3-settings__head-tag">M3 v{appVersion}</span>
         </header>

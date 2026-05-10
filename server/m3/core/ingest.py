@@ -34,7 +34,9 @@ from m3.brain import (
     signals as signals_mod,
 )
 from m3.brain.git import commit_ingest
+from m3.brain.topical import TopicalIndex
 from m3.brain.vectors import VectorIndex
+from m3.core import topical as topical_mod
 from m3.core.extract import (
     ExtractionOutput,
     Interpretation,
@@ -43,6 +45,7 @@ from m3.core.extract import (
     build_system_prompt,
     process_item_tool_schema,
 )
+from m3.core.item_title import extract_title
 from m3.core.llm import LLMProvider, Tool
 
 logger = logging.getLogger("m3.ingest")
@@ -299,13 +302,25 @@ class Ingester:
             llm_output_raw = parsed.model_dump()
             if extraction_error is not None:
                 llm_output_raw["_extraction_error"] = extraction_error
+            title = extract_title(inp.text, inp.original_filename)
             items_mod.write_meta(self.brain_root, items_mod.ItemMeta(
                 id=inp.item_id, kind=parsed.kind, source=inp.source, created_at=now_iso,
                 original_filename=inp.original_filename, extracted_text=inp.text,
                 when_iso=parsed.interpretation.when.iso, when_source=parsed.interpretation.when.source,
                 hooks=parsed.hooks.model_dump(), llm_output_raw=llm_output_raw,
                 confidence=parsed.interpretation.confidence,
+                title=title,
             ))
+
+            # Topical signature for the canvas v2 force layout. Best-effort:
+            # a flaky upsert never rolls back the ingest.
+            try:
+                await topical_mod.refresh_for_item(
+                    brain_root=self.brain_root, item_id=inp.item_id,
+                    extracted_text=inp.text, embedder=self.embedder,
+                )
+            except Exception:
+                logger.exception("topical refresh (item %s) skipped", inp.item_id)
 
             # 2. Self updates
             self_touched: list[str] = []
@@ -346,6 +361,18 @@ class Ingester:
                     body=new_body,
                     match_existing_slug=match_slug,
                 )
+                # Reload the just-written EntityDoc so refresh_for_entity sees the
+                # canonical-name + body it actually persisted.
+                final_slug = match_slug or entity_doc.slugify(eu.canonical_name)
+                final_doc = entity_doc.load(self.brain_root, slug=final_slug)
+                if final_doc is not None:
+                    try:
+                        await topical_mod.refresh_for_entity(
+                            brain_root=self.brain_root, slug=final_slug,
+                            doc=final_doc, embedder=self.embedder,
+                        )
+                    except Exception:
+                        logger.exception("topical refresh (entity %s) skipped", final_slug)
                 entities_touched.append(eu.canonical_name)
                 if eu.section_update:
                     changelog.append(
@@ -398,19 +425,46 @@ class Ingester:
             # Persisted as their own files so the canvas can surface them as
             # first-class nodes alongside entities. On reprocess we wipe stale
             # claims for the same item first so we don't accumulate ghosts.
-            claims_mod.delete_claims_for_item(self.brain_root, inp.item_id)
+            # Wipe the old claims AND their topical signatures before writing
+            # fresh ones, so reprocess doesn't accumulate ghost claim rows in
+            # the topical index. Best-effort: a flaky topical delete must not
+            # roll back the ingest.
+            stale_claim_ids = claims_mod.delete_claims_for_item(
+                self.brain_root, inp.item_id
+            )
+            if stale_claim_ids:
+                try:
+                    tidx = TopicalIndex.open(self.brain_root)
+                    try:
+                        for cid in stale_claim_ids:
+                            tidx.delete(f"claim:{cid}")
+                    finally:
+                        tidx.close()
+                except Exception:
+                    logger.exception(
+                        "topical cleanup for item %s skipped", inp.item_id,
+                    )
             touched_entity_slugs: set[str] = set()
             for c in parsed.claims:
                 claim_id = uuid.uuid4()
                 slugs = [entity_doc.slugify(name) for name in (c.entity_names or [])]
-                claims_mod.write_claim(self.brain_root, claims_mod.ClaimMeta(
+                claim_meta = claims_mod.ClaimMeta(
                     id=claim_id, item_id=inp.item_id,
                     proposition=c.proposition,
                     confidence=c.confidence,
                     supporting_span=c.supporting_span,
                     entity_slugs=slugs,
                     created_at=now_iso,
-                ))
+                    headline=c.headline,
+                )
+                claims_mod.write_claim(self.brain_root, claim_meta)
+                try:
+                    await topical_mod.refresh_for_claim(
+                        brain_root=self.brain_root, claim=claim_meta,
+                        embedder=self.embedder,
+                    )
+                except Exception:
+                    logger.exception("topical refresh (claim %s) skipped", claim_id)
                 touched_entity_slugs.update(slugs)
 
             # 5b. Synthesis: for any entity whose claim set just changed, ask
@@ -444,6 +498,15 @@ class Ingester:
                         await synthesize_entity(
                             brain_root=self.brain_root, entity_slug=slug, llm=self.llm,
                         )
+                        synth = read_synthesis(self.brain_root, slug)
+                        if synth is not None:
+                            try:
+                                await topical_mod.refresh_for_synthesis(
+                                    brain_root=self.brain_root,
+                                    synth=synth, embedder=self.embedder,
+                                )
+                            except Exception:
+                                logger.exception("topical refresh (synthesis %s) skipped", slug)
                         synth_done += 1
                     except Exception:
                         logger.exception("synthesize %s: skipped due to error", slug)

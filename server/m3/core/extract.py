@@ -214,6 +214,12 @@ class ClaimOut(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=0.7)
     supporting_span: str = Field(default="", max_length=400)
     entity_names: list[str] = Field(default_factory=list, max_length=6)
+    headline: str = Field(
+        default="",
+        min_length=0,
+        max_length=80,
+        description="3-7 word interpretive tag-style label for the canvas v2 layout.",
+    )
 
     @field_validator("entity_names", mode="before")
     @classmethod
@@ -330,10 +336,10 @@ Correct process_item output (abridged):
   "claims": [
     {"proposition": "Aditya is leaning into the Pilot Path partnership conversation.",
      "confidence": 0.9, "supporting_span": "leaning into the Pilot Path partnership conversation",
-     "entity_names": ["Aditya", "Pilot Path"]},
+     "entity_names": ["Aditya", "Pilot Path"], "headline": "Pilot Path partnership"},
     {"proposition": "Manoj met Aditya for coffee and plans to follow up next week.",
      "confidence": 0.85, "supporting_span": "Had coffee with Aditya today.",
-     "entity_names": ["Aditya"]}
+     "entity_names": ["Aditya"], "headline": "Coffee + follow-up"}
   ]
 }
 
@@ -441,7 +447,7 @@ Correct process_item output (abridged):
   "claims": [
     {"proposition": "The transformer architecture relies entirely on attention mechanisms.",
      "confidence": 0.85, "supporting_span": "great refresher on transformer internals",
-     "entity_names": ["Transformers", "attention mechanisms"]}
+     "entity_names": ["Transformers", "attention mechanisms"], "headline": "Attention-only architecture"}
   ]
 }
 
@@ -561,6 +567,26 @@ Rules for claims:
   `entity_names` (≤6). Use the SAME canonical name you use elsewhere.
 - Confidence: 0.5 for plausible-but-implicit, 0.8 for explicit, 0.95 for
   verbatim. Never above 0.95.
+- Headline: each claim MUST also emit a `headline` — a 3-7 word
+  interpretive tag that captures the concept the claim is about, NOT
+  a paraphrase of the proposition. Think of it as the label a
+  researcher would write on a card to file the claim. Strong verbs
+  and concrete nouns; avoid the subject's name (it appears elsewhere
+  on the canvas).
+
+  Examples of good headline / proposition pairs:
+
+    headline: "Long CTO tenure"
+    proposition: "Manoj has been the CTO of three early-stage startups since 2018."
+
+    headline: "Phase 1 deadline: Jun 14"
+    proposition: "Project PACIFIC Phase 1 has a target completion of June 14, 2026."
+
+    headline: "GDPR risk flagged"
+    proposition: "Publicly addressable endpoints were flagged for GDPR exposure in legal review."
+
+    headline: "PhD in software engineering"
+    proposition: "Manoj holds a PhD in software engineering from the University of Newcastle."
 
 Records and signals usually emit 0 claims. Personal and reference items
 typically emit 1–4.

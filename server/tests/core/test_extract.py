@@ -168,3 +168,44 @@ def test_system_prompt_documents_claims():
     # Must mention the Karpathy-style shape (decontextualized + supporting span)
     assert "decontextualized" in s.lower() or "stand alone" in s.lower()
     assert "supporting_span" in s or "supporting span" in s.lower()
+
+
+def test_claim_out_accepts_headline():
+    from m3.core.extract import ClaimOut
+    c = ClaimOut(
+        proposition="Manoj has been the CTO of three startups since 2018.",
+        confidence=0.8,
+        supporting_span="...",
+        headline="Long CTO tenure",
+    )
+    assert c.headline == "Long CTO tenure"
+
+
+def test_claim_out_headline_optional_defaults_empty():
+    """Older LLM outputs without headline must still parse — empty string."""
+    from m3.core.extract import ClaimOut
+    c = ClaimOut(proposition="A real claim.", confidence=0.5, supporting_span="...")
+    assert c.headline == ""
+
+
+def test_claim_out_headline_length_bound():
+    from m3.core.extract import ClaimOut
+    # Too long: rejected
+    with pytest.raises(ValueError):
+        ClaimOut(proposition="x" * 10, headline="a" * 200)
+
+
+def test_system_prompt_documents_headline():
+    """The prompt rules block must teach the model what a headline is."""
+    from m3.core.extract import build_system_prompt
+    s = build_system_prompt(today_iso="2026-04-19", self_doc="", candidate_entities_block="")
+    assert "headline" in s.lower()
+    # Should mention the interpretive-tag framing
+    assert "tag" in s.lower() or "label" in s.lower()
+
+
+def test_few_shots_include_headlines():
+    """All three claim-emitting few-shot examples must include a headline."""
+    from m3.core.extract import FEW_SHOT_EXAMPLES
+    # Three claim entries, each with a headline key
+    assert FEW_SHOT_EXAMPLES.count('"headline"') >= 3

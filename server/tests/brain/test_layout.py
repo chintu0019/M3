@@ -66,3 +66,9 @@ def test_brain_paths_resolves_all_locations(tmp_path: Path):
     assert p.changelog == tmp_path / "changelog.md"
     assert p.vectors_db == tmp_path / "index" / "vectors.sqlite"
     assert p.entity_path("pilot-path") == tmp_path / "entities" / "pilot-path.md"
+
+
+def test_brainpaths_exposes_topical_db(tmp_brain: Path):
+    from m3.brain.layout import BrainPaths
+    p = BrainPaths(tmp_brain)
+    assert p.topical_db == tmp_brain / "index" / "topical.sqlite"

@@ -48,6 +48,11 @@ class LLMSettingsView(BaseModel):
     unconfigured_reason: str | None = None
     # Informational — tells the user which value is actually in effect.
     env_overrides: list[str] = Field(default_factory=list)
+    # Canvas redesign feature flag — see CanvasConfig in core/config.py.
+    # NOTE: this isn't strictly an LLM setting; the class name LLMSettingsView
+    # is now slightly incongruous. A later refactor can rename to SettingsView
+    # once more non-LLM settings land.
+    canvas_v2_enabled: bool = False
 
 
 class LLMSettingsUpdate(BaseModel):
@@ -60,6 +65,7 @@ class LLMSettingsUpdate(BaseModel):
     clear_anthropic_api_key: bool = False
     local_agent_command: str | None = None
     local_agent_args: list[str] | None = None
+    canvas_v2_enabled: bool | None = None
 
 
 class LocalAgentInfo(BaseModel):
@@ -115,6 +121,7 @@ def build_settings_router() -> APIRouter:
             configured=configured,
             unconfigured_reason=reason,
             env_overrides=overrides,
+            canvas_v2_enabled=_cfg.canvas_v2_enabled(),
         )
 
     @router.put("/settings", response_model=LLMSettingsView)
@@ -146,6 +153,8 @@ def build_settings_router() -> APIRouter:
                 # directly without flags. Sending no field at all (None)
                 # leaves the previous value alone.
                 c.llm.local_agent_args = list(body.local_agent_args)
+            if body.canvas_v2_enabled is not None:
+                c.canvas.v2 = bool(body.canvas_v2_enabled)
             return c
 
         _cfg.update(_mutator)

@@ -156,19 +156,186 @@ def search(
 @app.command()
 def reindex(
     brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+    topical: bool = typer.Option(
+        False,
+        "--topical",
+        help="Rebuild only the topical signatures index used by the canvas v2 force layout.",
+    ),
+    labels: bool = typer.Option(
+        False,
+        "--labels",
+        help="Backfill ItemMeta.title (deterministic) and ClaimMeta.headline (LLM call per claim).",
+    ),
 ):
-    """Rebuild FTS, hook, and vector indexes from items/meta."""
+    """Rebuild FTS, hook, and vector indexes from items/meta.
+
+    With ``--topical`` runs ONLY the topical signature backfill (the
+    canvas v2 force-layout index) — does not touch FTS / hook / vector.
+    Use this once on existing brains whose entities, claims, and
+    syntheses predate the topical-refresh ingest hooks.
+
+    With ``--labels`` walks every item / claim and backfills the
+    ``title`` / ``headline`` fields used by the canvas v2 nodes — items
+    deterministically (frontmatter title / first line / filename stem)
+    and claims via a small LLM call per claim. Skips records that
+    already have the field set so reruns are idempotent.
+    """
     import asyncio as _asyncio
-    from m3.brain.reindex import reindex_all
     brain_root = brain or _default_brain()
     if not (brain_root / "self.md").exists():
         typer.echo(f"brain at {brain_root} is not initialized", err=True)
         raise typer.Exit(code=1)
+
+    if labels:
+        n_items, n_claims, errors = _asyncio.run(_reindex_labels(brain_root, _make_llm()))
+        typer.echo(f"updated {n_items} item titles and {n_claims} claim headlines.")
+        for e in errors:
+            typer.echo(f"  error: {e}", err=True)
+        return
+
+    if topical:
+        n, errors = _asyncio.run(_reindex_topical(brain_root, _make_embedder()))
+        typer.echo(f"refreshed {n} topical signatures.")
+        for e in errors:
+            typer.echo(f"  error: {e}", err=True)
+        return
+
+    from m3.brain.reindex import reindex_all
     result = _asyncio.run(reindex_all(brain_root, embedder=_make_embedder()))
     typer.echo(f"indexed {result.items_indexed} items")
     if result.errors:
         for e in result.errors:
             typer.echo(f"  error: {e}", err=True)
+
+
+async def _reindex_labels(brain_root: Path, llm) -> tuple[int, int, list[str]]:
+    """Backfill item titles (deterministic) and claim headlines (LLM).
+
+    Walks every persisted item / claim. Items get ``title`` filled from
+    ``extract_title`` (frontmatter > first non-empty line > filename
+    stem) — no LLM. Claims get ``headline`` from a single
+    ``generate_headline`` LLM call each. Records that already have the
+    field set are skipped, so reruns are idempotent. Per-record errors
+    are collected and reported instead of aborting the walk.
+    """
+    from m3.brain.claims import iter_claims, write_claim
+    from m3.brain.items import iter_metas, write_meta
+    from m3.core.headline import generate_headline
+    from m3.core.item_title import extract_title
+
+    n_items = 0
+    n_claims = 0
+    errors: list[str] = []
+
+    for meta in iter_metas(brain_root):
+        if meta.title:
+            continue
+        new_title = extract_title(meta.extracted_text, meta.original_filename)
+        if not new_title:
+            continue
+        meta.title = new_title
+        try:
+            write_meta(brain_root, meta)
+            n_items += 1
+        except Exception as e:
+            errors.append(f"item:{meta.id}: {e}")
+
+    for claim in iter_claims(brain_root):
+        if claim.headline:
+            continue
+        try:
+            new_headline = await generate_headline(proposition=claim.proposition, llm=llm)
+            if new_headline:
+                claim.headline = new_headline
+                write_claim(brain_root, claim)
+                n_claims += 1
+        except Exception as e:
+            errors.append(f"claim:{claim.id}: {e}")
+
+    return n_items, n_claims, errors
+
+
+async def _reindex_topical(brain_root: Path, embedder) -> tuple[int, list[str]]:
+    """Walk every entity / item / claim / synthesis in the brain and refresh
+    its topical signature. Returns (count, errors).
+
+    Opens the TopicalIndex once for the whole backfill (so we don't reload
+    the sqlite-vec extension + re-run CREATE VIRTUAL TABLE for every record)
+    and passes it to each refresh helper. Per-record errors are collected
+    rather than aborting the walk, matching the pattern in reindex_all.
+
+    Kept private because it's only here to back the `--topical` flag — the
+    canonical entry points for individual records are the per-type
+    refresh helpers in m3.core.topical, called from the ingest pipeline.
+    """
+    from m3.brain import entity_doc
+    from m3.brain.claims import iter_claims
+    from m3.brain.items import iter_metas
+    from m3.brain.layout import BrainPaths
+    from m3.brain.synthesis import iter_syntheses
+    from m3.brain.topical import TopicalIndex
+    from m3.core.topical import (
+        refresh_for_claim,
+        refresh_for_entity,
+        refresh_for_item,
+        refresh_for_synthesis,
+    )
+
+    n = 0
+    errors: list[str] = []
+    idx = TopicalIndex.open(brain_root)
+    try:
+        # Entities — no iter_entities helper, so glob the dossier dir and reload.
+        entities_dir = BrainPaths(brain_root).entities_dir
+        if entities_dir.exists():
+            for f in sorted(entities_dir.glob("*.md")):
+                slug = f.stem
+                doc = entity_doc.load(brain_root, slug=slug)
+                if doc is None:
+                    continue
+                try:
+                    await refresh_for_entity(
+                        brain_root=brain_root, slug=slug, doc=doc,
+                        embedder=embedder, idx=idx,
+                    )
+                    n += 1
+                except Exception as e:
+                    errors.append(f"entity:{slug}: {e}")
+
+        for meta in iter_metas(brain_root):
+            try:
+                await refresh_for_item(
+                    brain_root=brain_root,
+                    item_id=meta.id,
+                    extracted_text=meta.extracted_text,
+                    embedder=embedder,
+                    idx=idx,
+                )
+                n += 1
+            except Exception as e:
+                errors.append(f"item:{meta.id}: {e}")
+
+        for claim in iter_claims(brain_root):
+            try:
+                await refresh_for_claim(
+                    brain_root=brain_root, claim=claim, embedder=embedder, idx=idx,
+                )
+                n += 1
+            except Exception as e:
+                errors.append(f"claim:{claim.id}: {e}")
+
+        for synth in iter_syntheses(brain_root):
+            try:
+                await refresh_for_synthesis(
+                    brain_root=brain_root, synth=synth, embedder=embedder, idx=idx,
+                )
+                n += 1
+            except Exception as e:
+                errors.append(f"synthesis:{synth.entity_slug}: {e}")
+    finally:
+        idx.close()
+
+    return n, errors
 
 
 @app.command()

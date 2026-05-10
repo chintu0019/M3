@@ -25,6 +25,7 @@ class ItemMeta:
     llm_output_raw: dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0
     archived: bool = False
+    title: str | None = None        # clean human-readable label (frontmatter title / first line / filename stem)
 
 
 def write_item(root: Path, item_id: uuid.UUID, *, extension: str, content: bytes) -> Path:
