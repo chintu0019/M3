@@ -8,10 +8,6 @@
 
 import { catColor, type Category } from "../../lib/canvasColors";
 
-export const ENTITY_CATS: ReadonlySet<Category> = new Set([
-  "person", "project", "concept", "reading", "decision", "other",
-]);
-
 export type Variant = "cosmos" | "blueprint";
 
 export interface DisplayNode {
