@@ -34,6 +34,7 @@ from m3.brain import (
     signals as signals_mod,
 )
 from m3.brain.git import commit_ingest
+from m3.brain.topical import TopicalIndex
 from m3.brain.vectors import VectorIndex
 from m3.core import topical as topical_mod
 from m3.core.extract import (
@@ -421,7 +422,25 @@ class Ingester:
             # Persisted as their own files so the canvas can surface them as
             # first-class nodes alongside entities. On reprocess we wipe stale
             # claims for the same item first so we don't accumulate ghosts.
-            claims_mod.delete_claims_for_item(self.brain_root, inp.item_id)
+            # Wipe the old claims AND their topical signatures before writing
+            # fresh ones, so reprocess doesn't accumulate ghost claim rows in
+            # the topical index. Best-effort: a flaky topical delete must not
+            # roll back the ingest.
+            stale_claim_ids = claims_mod.delete_claims_for_item(
+                self.brain_root, inp.item_id
+            )
+            if stale_claim_ids:
+                try:
+                    tidx = TopicalIndex.open(self.brain_root)
+                    try:
+                        for cid in stale_claim_ids:
+                            tidx.delete(f"claim:{cid}")
+                    finally:
+                        tidx.close()
+                except Exception:
+                    logger.exception(
+                        "topical cleanup for item %s skipped", inp.item_id,
+                    )
             touched_entity_slugs: set[str] = set()
             for c in parsed.claims:
                 claim_id = uuid.uuid4()

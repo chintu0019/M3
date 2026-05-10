@@ -42,3 +42,17 @@ def test_topical_dim_validates(tmp_brain: Path):
     idx = TopicalIndex.open(tmp_brain)
     with pytest.raises(ValueError):
         idx.upsert("entity:a", [0.1] * (TOPICAL_DIM - 1))
+
+
+def test_topical_index_delete_removes_row(tmp_brain: Path):
+    idx = TopicalIndex.open(tmp_brain)
+    idx.upsert("claim:abc", [0.1] * TOPICAL_DIM)
+    assert idx.get("claim:abc") is not None
+    idx.delete("claim:abc")
+    assert idx.get("claim:abc") is None
+
+
+def test_topical_index_delete_missing_is_noop(tmp_brain: Path):
+    idx = TopicalIndex.open(tmp_brain)
+    idx.delete("claim:nonexistent")  # should not raise
+    assert idx.get("claim:nonexistent") is None

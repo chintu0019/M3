@@ -59,6 +59,10 @@ class TopicalIndex:
         )
         self._conn.commit()
 
+    def delete(self, node_id: str) -> None:
+        self._conn.execute("DELETE FROM topical WHERE node_id = ?", (node_id,))
+        self._conn.commit()
+
     def get(self, node_id: str) -> list[float] | None:
         row = self._conn.execute(
             "SELECT embedding FROM topical WHERE node_id = ?", (node_id,)
