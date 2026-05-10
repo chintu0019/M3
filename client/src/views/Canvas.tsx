@@ -35,6 +35,7 @@ import {
   type Layout,
   type LayoutLink,
   type LayoutNode,
+  type PrevPositions,
 } from "../lib/forceLayout";
 
 const SUGGESTIONS = [
@@ -233,6 +234,13 @@ export default function Canvas() {
     return { nodes, links };
   }, [cluster, showAllSources, showAllClaims, expandedEntities]);
 
+  // Carries the previous layout's per-node x/y/vx/vy across rebuilds so a
+  // click that reveals a few extra claim/item nodes doesn't snap every other
+  // node back to its id-hash slot. We can't reach into a useMemo's previous
+  // value directly, so we stash it in a ref the moment the previous layout
+  // is replaced.
+  const prevLayoutRef = useRef<Layout | null>(null);
+
   const layout = useMemo<Layout>(() => {
     const nodes: LayoutNode[] = display.nodes.map(n => ({
       id: n.id, cat: n.cat,
@@ -241,9 +249,23 @@ export default function Canvas() {
     }));
     const links: LayoutLink[] = display.links.map(l => ({ s: l.s, t: l.t }));
     const ego = display.nodes.find(n => n.isEgo)?.id;
-    return initLayout(nodes, links, { width: 1600, height: 1100, egoId: ego, v2 });
+    // Snapshot any still-living node from the previous layout. Brand-new node
+    // ids fall through to the slotter and pick up an id-hash slot; everything
+    // else carries over its current screen position.
+    let prev: PrevPositions | undefined;
+    const prevLayout = prevLayoutRef.current;
+    if (prevLayout && prevLayout.state.length > 0) {
+      prev = new Map();
+      for (const s of prevLayout.state) {
+        prev.set(s.id, { x: s.x, y: s.y, vx: s.vx, vy: s.vy });
+      }
+    }
+    const next = initLayout(nodes, links, { width: 1600, height: 1100, egoId: ego, v2, prev });
+    prevLayoutRef.current = next;
+    return next;
     // Re-init on cluster identity. Force layouts can't be incrementally
-    // mutated with new node sets without state surgery; cleaner to rebuild.
+    // mutated with new node sets without state surgery; cleaner to rebuild
+    // and let the position carry-over keep continuity.
   }, [display.nodes, display.links, v2]);
 
   // Resize observer for the canvas container — used for camera fit.
@@ -270,12 +292,18 @@ export default function Canvas() {
     return () => cancelAnimationFrame(raf);
   }, [layout]);
 
-  // Initial fit when layout + viewport are ready. Centred on the ego (You),
-  // not on the bounding-box midpoint — otherwise an asymmetric set of nodes
-  // pulls the focal point off-centre and the user's "I am the centre" gets
-  // visually relocated to a corner.
+  // One-shot initial fit: centre the camera on the ego (or fit-all in v2)
+  // the first time a non-empty layout + a real viewport size meet. Crucially
+  // we only do this ONCE — every click that toggles entity expansion rebuilds
+  // `layout`, and re-running this effect on each rebuild was animating the
+  // camera back to the bounding-box centre on every click. That was the
+  // "clicking anything resets the zoom and moves everything" behaviour the
+  // user reported.
+  const didInitialFitRef = useRef(false);
   useEffect(() => {
+    if (didInitialFitRef.current) return;
     if (viewSize.w < 10 || layout.state.length === 0) return;
+    didInitialFitRef.current = true;
     const ego = layout.state.find(s => s.pinned);
     let extentR = 0;
     if (ego) {
@@ -392,11 +420,25 @@ export default function Canvas() {
   }, [layout, viewSize.w, viewSize.h, display.links]);
 
   const clearFocus = useCallback(() => {
-    setFocusedNodeId(null);
-    setHighlighted(new Set());
-    setExpandedEntities(new Set());
+    // Idempotent on an already-cleared canvas. Without these guards, every
+    // empty-canvas click was triggering setExpandedEntities(new Set()) — which
+    // changed `display`'s identity and rebuilt the layout. The position
+    // carry-over keeps surviving nodes in place, but skipping the no-op state
+    // writes is cheaper and removes a per-click flicker.
+    let didAnything = false;
+    setFocusedNodeId(curr => { if (curr) didAnything = true; return null; });
+    setHighlighted(curr => { if (curr.size) didAnything = true; return curr.size ? new Set() : curr; });
+    setExpandedEntities(curr => {
+      if (curr.size === 0) return curr;
+      didAnything = true;
+      return new Set();
+    });
+    if (!didAnything) return;
     // Recenter the camera on You. The focus animation moves the camera off
-    // ego when the user explores; clearing focus should put them back.
+    // ego when the user explores; clearing focus should put them back. v2 has
+    // no pinned ego (the centre is "now", not "you"), so the recenter is
+    // skipped on v2 — clicking the background just clears focus, no camera
+    // move.
     const ego = layout.state.find(s => s.pinned);
     if (ego && viewSize.w >= 10) {
       let extentR = 0;

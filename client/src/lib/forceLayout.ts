@@ -157,10 +157,29 @@ export interface Layout {
   setParams(next: Partial<LayoutParams>): void;
 }
 
+/**
+ * Position snapshot used to preserve continuity when `initLayout` is rebuilt
+ * with the same node identities (e.g. when an entity is expanded so a few
+ * claim/item nodes appear, but the entity ring itself shouldn't snap back to
+ * id-hash slots). Caller captures this from the previous layout's `state`.
+ */
+export type PrevPositions = Map<string, { x: number; y: number; vx: number; vy: number }>;
+
 export function initLayout(
   nodes: LayoutNode[],
   links: LayoutLink[],
-  opts: { width?: number; height?: number; egoId?: string; v2?: boolean } = {},
+  opts: {
+    width?: number;
+    height?: number;
+    egoId?: string;
+    v2?: boolean;
+    /** Reuse position+velocity for matching ids so a layout rebuild driven
+     *  by a click (e.g. expanding an entity) doesn't reset every node to its
+     *  initial slot. Initial frame counter is set to "mostly cool" when this
+     *  is non-empty, so new nodes get a brief settle without the full 10s
+     *  warm-up reshuffling everyone. */
+    prev?: PrevPositions;
+  } = {},
 ): Layout {
   const W = opts.width ?? 1600;
   const H = opts.height ?? 1100;
@@ -168,6 +187,7 @@ export function initLayout(
   const cy = H / 2;
   const egoId = opts.egoId ?? nodes.find(n => n.cat === "self")?.id;
   const v2 = !!opts.v2;
+  const prev = opts.prev;
 
   // ── Radial slotter ──────────────────────────────────────────────────────
   // Replaces force-directed layout for the at-rest view. Each node gets a
@@ -299,9 +319,17 @@ export function initLayout(
     const isEgo = n.id === egoId;
     const pinned = !v2 && isEgo;   // v2 has no pinned ego — "now" is the center, not "you"
     const slot = slotXY.get(n.id) ?? { x: cx, y: cy };
+    // If we have a previous position for this id, reuse it. The slot is still
+    // computed (so it can serve as a fall-back / drag-release target on v1),
+    // but `x/y/vx/vy` carry over so the node visibly stays where the user
+    // left it across rebuilds.
+    const carry = prev?.get(n.id);
     return {
       id: n.id, cat: n.cat,
-      x: slot.x, y: slot.y, vx: 0, vy: 0,
+      x: carry?.x ?? slot.x,
+      y: carry?.y ?? slot.y,
+      vx: carry?.vx ?? 0,
+      vy: carry?.vy ?? 0,
       pinned, dragging: false, degree: 0,
       slotX: slot.x, slotY: slot.y,
     };
@@ -329,8 +357,11 @@ export function initLayout(
   let targetPos: { x: number; y: number } | null = null;
 
   // Frame counter for the v2 cooling schedule. Starts hot (frame=0) so the
-  // initial id-hash angles get pulled into clusters, then cools.
-  let frame = 0;
+  // initial id-hash angles get pulled into clusters, then cools. When we
+  // re-init with carried-over positions (typical click → reveal claims path)
+  // jump straight to "mostly cool" — most nodes are already settled, we only
+  // need a brief warm phase for the new arrivals.
+  let frame = prev && prev.size > 0 ? Math.floor(V2_COOL_FRAMES * 0.7) : 0;
   function temperature(): number {
     const t = Math.min(1, frame / V2_COOL_FRAMES);
     // Quadratic ease-out from 1.0 toward V2_COOL_FLOOR.
