@@ -5,6 +5,7 @@ surface (C) and as a live-highlighting substrate for the chat agent panel.
 
 from __future__ import annotations
 
+import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,9 @@ from m3.brain.items import read_meta
 from m3.brain.synthesis import iter_syntheses, read_synthesis
 from m3.brain.topical import TopicalIndex
 from m3.core.retrieve import Retriever
+
+
+logger = logging.getLogger("m3.cluster")
 
 
 NodeType = Literal["query", "item", "entity", "claim", "synthesis"]
@@ -368,17 +372,29 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
 
 
 def _attach_topical_vecs(graph: ClusterGraph, brain_root: Path) -> None:
-    """Populate node.topical_vec from the TopicalIndex. Best-effort: if the
-    index can't be opened (e.g. corrupted, never populated), every node
-    keeps its default None and the canvas v2 force layout falls back to
-    radial-only positioning."""
+    """Populate node.topical_vec from the TopicalIndex in one bulk read.
+
+    Best-effort: a corrupted or missing topical.sqlite degrades the
+    canvas v2 layout to radial-only positioning rather than failing
+    the cluster request.
+
+    Note on response size: each topical_vec is 768 floats (~6KB
+    serialized per node). For a brain with thousands of nodes this
+    adds tens of MB to /cluster/all responses. Acceptable on
+    localhost; revisit (float16 packing, opt-in flag, or binary
+    encoding) if response size becomes a problem.
+    """
     try:
         tidx = TopicalIndex.open(brain_root)
         try:
-            for node in graph.nodes:
-                node.topical_vec = tidx.get(node.id)
+            vecs = {nid: v for nid, v in tidx.iter_all()}
         finally:
             tidx.close()
     except Exception:
-        # Swallow — topical_vec is purely optional decoration.
-        pass
+        logger.warning(
+            "topical_vec attach failed; canvas v2 layout will fall back to radial-only",
+            exc_info=True,
+        )
+        return
+    for node in graph.nodes:
+        node.topical_vec = vecs.get(node.id)

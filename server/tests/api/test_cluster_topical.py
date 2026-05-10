@@ -57,7 +57,7 @@ def test_cluster_all_omits_topical_vec_for_unindexed_nodes(brain_and_app):
     # Every node that does NOT have an index entry should report topical_vec=None.
     for n in body["nodes"]:
         if n["id"] != "entity:manoj":
-            assert n.get("topical_vec") in (None, []), (
+            assert n.get("topical_vec") is None, (
                 f"node {n['id']} unexpectedly has topical_vec={n.get('topical_vec')}"
             )
 
