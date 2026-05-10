@@ -55,7 +55,7 @@
       }
     },
     "resources": ["resources/*.whl"],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": false
   },
   "plugins": {
     "updater": {
