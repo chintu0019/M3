@@ -89,7 +89,14 @@ jobs:
           tagName: ${{ env.TAG }}
           releaseName: M3 ${{ env.TAG }}
           releaseBody: |
-            **macOS:** `brew install --cask chintu0019/m3/m3` (after `brew tap chintu0019/m3 https://github.com/chintu0019/M3.git`), or download the `.dmg` below and drag M3 to Applications.
+            **macOS — recommended:** `brew install --cask chintu0019/m3/m3` (after `brew tap chintu0019/m3 https://github.com/chintu0019/M3.git`). Homebrew strips the macOS quarantine bit automatically.
+
+            **macOS — manual `.dmg` install:** drag M3 to Applications, then run once in Terminal:
+            ```
+            xattr -dr com.apple.quarantine /Applications/M3.app
+            ```
+            (M3 isn't Apple-notarized — without that, Gatekeeper shows "M3 is damaged" because Safari tagged the download with a quarantine attribute. The in-app auto-updater bypasses this for future versions.)
+
             **Linux:** download the `.AppImage` or `.deb` below.
 
             Existing installs auto-update via the in-app **Restart now** banner — no manual step needed.
