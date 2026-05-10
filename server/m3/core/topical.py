@@ -54,58 +54,78 @@ def signature_text_for_synthesis(synth: SynthesisMeta) -> str:
 
 async def refresh_for_entity(
     *, brain_root: Path, slug: str, doc: EntityDoc, embedder: _Embedder,
+    idx: TopicalIndex | None = None,
 ) -> None:
     """Compute the entity's signature, embed it, upsert into the topical index.
-    No-op if the signature is empty (e.g. a freshly-created stub entity)."""
+    No-op if the signature is empty (e.g. a freshly-created stub entity).
+
+    If ``idx`` is provided, use it and don't close it (caller owns the
+    lifecycle — used by the CLI backfill to share one connection across
+    thousands of records). Otherwise open and close locally as before.
+    """
     text = signature_text_for_entity(doc)
     if not text:
         return
     vec = (await embedder.embed([text]))[0]
-    idx = TopicalIndex.open(brain_root)
-    try:
+    if idx is None:
+        idx = TopicalIndex.open(brain_root)
+        try:
+            idx.upsert(f"entity:{slug}", vec)
+        finally:
+            idx.close()
+    else:
         idx.upsert(f"entity:{slug}", vec)
-    finally:
-        idx.close()
 
 
 async def refresh_for_item(
     *, brain_root: Path, item_id: _uuid.UUID, extracted_text: str | None,
-    embedder: _Embedder,
+    embedder: _Embedder, idx: TopicalIndex | None = None,
 ) -> None:
     text = signature_text_for_item(extracted_text)
     if not text:
         return
     vec = (await embedder.embed([text]))[0]
-    idx = TopicalIndex.open(brain_root)
-    try:
+    if idx is None:
+        idx = TopicalIndex.open(brain_root)
+        try:
+            idx.upsert(f"item:{item_id}", vec)
+        finally:
+            idx.close()
+    else:
         idx.upsert(f"item:{item_id}", vec)
-    finally:
-        idx.close()
 
 
 async def refresh_for_claim(
     *, brain_root: Path, claim: ClaimMeta, embedder: _Embedder,
+    idx: TopicalIndex | None = None,
 ) -> None:
     text = signature_text_for_claim(claim)
     if not text:
         return
     vec = (await embedder.embed([text]))[0]
-    idx = TopicalIndex.open(brain_root)
-    try:
+    if idx is None:
+        idx = TopicalIndex.open(brain_root)
+        try:
+            idx.upsert(f"claim:{claim.id}", vec)
+        finally:
+            idx.close()
+    else:
         idx.upsert(f"claim:{claim.id}", vec)
-    finally:
-        idx.close()
 
 
 async def refresh_for_synthesis(
     *, brain_root: Path, synth: SynthesisMeta, embedder: _Embedder,
+    idx: TopicalIndex | None = None,
 ) -> None:
     text = signature_text_for_synthesis(synth)
     if not text:
         return
     vec = (await embedder.embed([text]))[0]
-    idx = TopicalIndex.open(brain_root)
-    try:
+    if idx is None:
+        idx = TopicalIndex.open(brain_root)
+        try:
+            idx.upsert(f"synthesis:{synth.entity_slug}", vec)
+        finally:
+            idx.close()
+    else:
         idx.upsert(f"synthesis:{synth.entity_slug}", vec)
-    finally:
-        idx.close()

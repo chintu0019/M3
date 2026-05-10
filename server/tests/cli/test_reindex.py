@@ -129,3 +129,33 @@ def test_reindex_without_topical_runs_existing_path(
     finally:
         idx.close()
     assert rows == []
+
+
+def test_reindex_topical_continues_on_per_record_error(
+    tmp_brain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One bad embedding shouldn't abort the whole backfill — the CLI should
+    keep going and report the failure at the end."""
+    _seed_entity(tmp_brain, name="A", body="One.")
+    _seed_entity(tmp_brain, name="B", body="Two.")
+    _seed_entity(tmp_brain, name="C", body="Three.")
+
+    class _FlakyEmbedder:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated embedder hiccup")
+            return [[float(len(t)) / 1000.0] * 768 for t in texts]
+
+    flaky = _FlakyEmbedder()
+    monkeypatch.setattr("m3.cli._make_embedder", lambda: flaky)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["reindex", "--topical", "--brain", str(tmp_brain)])
+    assert result.exit_code == 0, result.output
+    # Should report 2 refreshed (out of 3 attempted) and one error line.
+    assert "refreshed 2" in result.output
+    assert "simulated embedder hiccup" in result.output
