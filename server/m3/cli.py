@@ -156,19 +156,93 @@ def search(
 @app.command()
 def reindex(
     brain: Path = typer.Option(None, "--brain", help="Brain directory."),
+    topical: bool = typer.Option(
+        False,
+        "--topical",
+        help="Rebuild only the topical signatures index used by the canvas v2 force layout.",
+    ),
 ):
-    """Rebuild FTS, hook, and vector indexes from items/meta."""
+    """Rebuild FTS, hook, and vector indexes from items/meta.
+
+    With ``--topical`` runs ONLY the topical signature backfill (the
+    canvas v2 force-layout index) — does not touch FTS / hook / vector.
+    Use this once on existing brains whose entities, claims, and
+    syntheses predate the topical-refresh ingest hooks.
+    """
     import asyncio as _asyncio
-    from m3.brain.reindex import reindex_all
     brain_root = brain or _default_brain()
     if not (brain_root / "self.md").exists():
         typer.echo(f"brain at {brain_root} is not initialized", err=True)
         raise typer.Exit(code=1)
+
+    if topical:
+        n = _asyncio.run(_reindex_topical(brain_root, _make_embedder()))
+        typer.echo(f"refreshed {n} topical signatures.")
+        return
+
+    from m3.brain.reindex import reindex_all
     result = _asyncio.run(reindex_all(brain_root, embedder=_make_embedder()))
     typer.echo(f"indexed {result.items_indexed} items")
     if result.errors:
         for e in result.errors:
             typer.echo(f"  error: {e}", err=True)
+
+
+async def _reindex_topical(brain_root: Path, embedder) -> int:
+    """Walk every entity / item / claim / synthesis in the brain and refresh
+    its topical signature. Returns the number of signatures touched.
+
+    Kept private because it's only here to back the `--topical` flag — the
+    canonical entry points for individual records are the per-type
+    refresh helpers in m3.core.topical, called from the ingest pipeline.
+    """
+    from m3.brain import entity_doc
+    from m3.brain.claims import iter_claims
+    from m3.brain.items import iter_metas
+    from m3.brain.layout import BrainPaths
+    from m3.brain.synthesis import iter_syntheses
+    from m3.core.topical import (
+        refresh_for_claim,
+        refresh_for_entity,
+        refresh_for_item,
+        refresh_for_synthesis,
+    )
+
+    n = 0
+
+    # Entities — no iter_entities helper, so glob the dossier dir and reload.
+    entities_dir = BrainPaths(brain_root).entities_dir
+    if entities_dir.exists():
+        for f in sorted(entities_dir.glob("*.md")):
+            slug = f.stem
+            doc = entity_doc.load(brain_root, slug=slug)
+            if doc is None:
+                continue
+            await refresh_for_entity(
+                brain_root=brain_root, slug=slug, doc=doc, embedder=embedder,
+            )
+            n += 1
+
+    for meta in iter_metas(brain_root):
+        await refresh_for_item(
+            brain_root=brain_root,
+            item_id=meta.id,
+            extracted_text=meta.extracted_text,
+            embedder=embedder,
+        )
+        n += 1
+
+    for claim in iter_claims(brain_root):
+        await refresh_for_claim(brain_root=brain_root, claim=claim, embedder=embedder)
+        n += 1
+
+    for synth in iter_syntheses(brain_root):
+        await refresh_for_synthesis(
+            brain_root=brain_root, synth=synth, embedder=embedder,
+        )
+        n += 1
+
+    return n
 
 
 @app.command()
