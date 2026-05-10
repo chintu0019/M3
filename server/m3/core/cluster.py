@@ -15,6 +15,7 @@ from m3.brain.entity_doc import load as load_entity
 from m3.brain.entity_doc import slugify
 from m3.brain.items import read_meta
 from m3.brain.synthesis import iter_syntheses, read_synthesis
+from m3.brain.topical import TopicalIndex
 from m3.core.retrieve import Retriever
 
 
@@ -41,6 +42,7 @@ class ClusterNode:
     claim_id: str | None = None            # for claim nodes
     confidence: float | None = None        # for claim nodes
     synthesis_id: str | None = None        # for synthesis nodes
+    topical_vec: list[float] | None = None  # 768-dim signature; populated from TopicalIndex
 
 
 @dataclass
@@ -195,6 +197,7 @@ async def build_cluster(
                     source=synth_node_id, target=claim_node_id, kind="synthesizes",
                 ))
 
+    _attach_topical_vecs(graph, brain_root)
     return graph
 
 
@@ -360,4 +363,22 @@ async def build_full_graph(*, brain_root: Path) -> ClusterGraph:
                     source=synth_node_id, target=claim_node_id, kind="synthesizes",
                 ))
 
+    _attach_topical_vecs(graph, brain_root)
     return graph
+
+
+def _attach_topical_vecs(graph: ClusterGraph, brain_root: Path) -> None:
+    """Populate node.topical_vec from the TopicalIndex. Best-effort: if the
+    index can't be opened (e.g. corrupted, never populated), every node
+    keeps its default None and the canvas v2 force layout falls back to
+    radial-only positioning."""
+    try:
+        tidx = TopicalIndex.open(brain_root)
+        try:
+            for node in graph.nodes:
+                node.topical_vec = tidx.get(node.id)
+        finally:
+            tidx.close()
+    except Exception:
+        # Swallow — topical_vec is purely optional decoration.
+        pass
