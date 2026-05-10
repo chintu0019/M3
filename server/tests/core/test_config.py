@@ -124,3 +124,26 @@ def test_llm_config_env_overrides(monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:72b")
     assert cfg.llm_provider() == "anthropic"
     assert cfg.ollama_model() == "qwen2.5:72b"
+
+
+def test_canvas_v2_defaults_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("M3_CONFIG_DIR", str(tmp_path))
+    loaded = cfg.load()
+    assert loaded.canvas.v2 is False
+
+
+def test_canvas_v2_round_trips_through_save_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("M3_CONFIG_DIR", str(tmp_path))
+    initial = cfg.load()
+    initial.canvas.v2 = True
+    cfg.save(initial)
+    reloaded = cfg.load()
+    assert reloaded.canvas.v2 is True
+
+
+def test_canvas_v2_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("M3_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("M3_CANVAS_V2", "true")
+    assert cfg.canvas_v2_enabled() is True
+    monkeypatch.setenv("M3_CANVAS_V2", "0")
+    assert cfg.canvas_v2_enabled() is False
