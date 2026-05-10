@@ -68,9 +68,15 @@ jobs:
             src-tauri/target
           key: ${{ matrix.platform }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      - name: Build m3 wheel
-        run: ./scripts/build-wheel.sh
-
+      # Frontend MUST build before the wheel: scripts/build-wheel.sh
+      # snapshots client/dist/ into server/m3/_client_dist/ at packaging
+      # time. If we built the wheel first, it would only contain the two
+      # tracked files in client/dist/ (index.html, manifest.json) and ship
+      # without any of vite's hashed JS/CSS bundles in client/dist/assets/.
+      # The Python server then crashes at boot with
+      # "Directory '_client_dist/assets' does not exist" because
+      # FastAPI.mount() check_dir=True. Local scripts/update.sh has the
+      # same ordering for the same reason.
       - name: Install frontend deps
         working-directory: client
         run: npm ci --no-audit --no-fund
@@ -78,6 +84,9 @@ jobs:
       - name: Build frontend bundle
         working-directory: client
         run: npm run build
+
+      - name: Build m3 wheel
+        run: ./scripts/build-wheel.sh
 
       - uses: tauri-apps/tauri-action@v0
         env:

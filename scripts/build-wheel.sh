@@ -46,6 +46,16 @@ DIST_DST="$ROOT/server/m3/_client_dist"
 
 [[ -f "$DIST_SRC/index.html" ]] || die "client/dist/index.html missing — run \`cd client && npm run build\` first"
 
+# Vite emits hashed JS/CSS bundles under client/dist/assets/. If that
+# directory is missing or empty (e.g. CI runs build-wheel.sh before
+# `npm run build`), the wheel ships only the two tracked stub files
+# (index.html + manifest.json) and the FastAPI server crashes on boot
+# with `Directory '_client_dist/assets' does not exist`. We failed
+# this way silently for several CI releases — never again.
+if [[ ! -d "$DIST_SRC/assets" ]] || [[ -z "$(ls -A "$DIST_SRC/assets" 2>/dev/null)" ]]; then
+  die "client/dist/assets/ is empty — did you forget to run \`cd client && npm run build\` before this script?"
+fi
+
 step "Vendoring client/dist into the package as m3/_client_dist"
 rm -rf "$DIST_DST"
 cp -R "$DIST_SRC" "$DIST_DST"
@@ -68,8 +78,15 @@ WHEEL="$(find "$RESOURCES" -maxdepth 1 -name 'm3-*.whl' -print -quit)"
 # Sanity-check that the SPA actually made it into the wheel. We avoid
 # `grep -q` here — it would close the pipe early, SIGPIPE unzip, and (with
 # pipefail) make the whole pipeline look failed.
-if [[ "$(unzip -l "$WHEEL" 2>/dev/null | grep -c 'm3/_client_dist/index\.html')" -eq 0 ]]; then
+WHEEL_LISTING="$(unzip -l "$WHEEL" 2>/dev/null)"
+if [[ "$(echo "$WHEEL_LISTING" | grep -c 'm3/_client_dist/index\.html')" -eq 0 ]]; then
   die "wheel built but m3/_client_dist/index.html is missing — check pyproject package data"
+fi
+# The asset bundles (JS + CSS) live under m3/_client_dist/assets/. Without
+# them the FastAPI app crashes at boot mounting StaticFiles. Catching this
+# in build is much cheaper than chasing it from a user's logs.
+if [[ "$(echo "$WHEEL_LISTING" | grep -c 'm3/_client_dist/assets/')" -eq 0 ]]; then
+  die "wheel built but m3/_client_dist/assets/ is empty — frontend probably wasn't built before this script ran"
 fi
 
 ok "Built $(basename "$WHEEL") ($(du -h "$WHEEL" | awk '{print $1}'))"
