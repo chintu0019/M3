@@ -356,16 +356,33 @@ export function Graph({
             );
           })}
 
-          {/* Nodes — render ego last so it sits on top. In v2, ego is
+          {/* Nodes — render ego last so it sits on top, and the expanded
+            * claim card (if any) last of all so its <foreignObject> paints
+            * over every other pill. SVG has no z-index — document order is
+            * paint order — so the only way to keep the open card on top is
+            * to sort its <g> to the end of the list. In v2, ego is
             * suppressed entirely (center is "now," not "you"). */}
           {[...layout.state]
-            .sort((a, b) => Number(nodeById.get(a.id)?.isEgo ?? false) - Number(nodeById.get(b.id)?.isEgo ?? false))
+            .sort((a, b) => {
+              const aExpanded = expandedClaimId === a.id ? 1 : 0;
+              const bExpanded = expandedClaimId === b.id ? 1 : 0;
+              if (aExpanded !== bExpanded) return aExpanded - bExpanded;
+              return Number(nodeById.get(a.id)?.isEgo ?? false) - Number(nodeById.get(b.id)?.isEgo ?? false);
+            })
             .filter(s => !v2 || !nodeById.get(s.id)?.isEgo)
             .map(s => {
               const n = nodeById.get(s.id);
               if (!n) return null;
-              const hl = hasHL && highlighted.has(s.id);
-              const dim = hasHL && !hl;
+              let hl = hasHL && highlighted.has(s.id);
+              let dim = hasHL && !hl;
+              // When a claim card is expanded, dim every other node so the
+              // focused card has visual primacy. Suppress chat-highlight on
+              // non-expanded nodes to avoid a confusing "dimmed but bright"
+              // state where two different focus systems fight each other.
+              if (expandedClaimId && s.id !== expandedClaimId) {
+                hl = false;
+                dim = true;
+              }
               const pre = preHighlighted.has(s.id);
               const pulse = pulseId === s.id;
               const r = n.isEgo ? 32 : 8 + Math.sqrt(s.degree) * 3;
