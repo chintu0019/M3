@@ -54,7 +54,15 @@ Cask strips the Gatekeeper quarantine attribute automatically, so M3 launches wi
 
 ### macOS / Linux via direct download
 
-Grab the latest `.dmg` (macOS) or `.AppImage` (Linux) from [Releases](https://github.com/chintu0019/M3/releases) and drag M3 into `/Applications`. Launch it.
+Grab the latest `.dmg` (macOS) or `.AppImage` (Linux) from [Releases](https://github.com/chintu0019/M3/releases) and drag M3 into `/Applications`.
+
+**macOS only — strip the quarantine bit before first launch:**
+
+```bash
+xattr -dr com.apple.quarantine /Applications/M3.app
+```
+
+Without this, you'll see "M3 is damaged and can't be opened" — that's not actual damage, it's macOS Gatekeeper refusing to run an app it can't notarize-verify. The Homebrew cask install path skips this entirely; so does the in-app auto-updater for future versions.
 
 On first launch the app sets up its private runtime — this takes ~30s and shows a splash screen. Subsequent launches are instant. Updates land via the in-app **Restart now** banner; the entire stack (shell + Python backend + frontend) updates atomically.
 
@@ -114,11 +122,17 @@ The other two providers in Settings:
 
 ## macOS Gatekeeper
 
-Unsigned `.app` bundles trip Gatekeeper's "Apple cannot check this for malicious software" dialog. Until releases are signed and notarized, work around it with one of:
+Unsigned `.app` bundles trip Gatekeeper. On recent macOS (Sonoma+) the dialog reads **"M3 is damaged and can't be opened. You should move it to the Trash"** — that's misleading; the binary is fine, Gatekeeper just refuses to launch it because we don't pay for an Apple Developer Program membership and can't notarize.
 
-- Right-click the app, choose **Open**, then click **Open** again in the dialog
-- `xattr -d com.apple.quarantine /Applications/M3.app`
-- Install via Homebrew Cask once a tap is published (Cask strips the quarantine attribute automatically)
+Pick one:
+
+- **Homebrew cask** (recommended). `brew install --cask` strips the quarantine attribute automatically — no further action needed.
+- **Direct `.dmg` install.** Run once after dragging M3 to Applications:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/M3.app
+  ```
+  Right-click → Open does not work for fully-unsigned apps on recent macOS — only the xattr path is reliable.
+- **In-app auto-updater.** Once you're past the first install, future versions land via the updater plugin (HTTP fetch from inside the app, not Safari) and don't get the quarantine attribute. So this is a one-time hassle per fresh install.
 
 ## Philosophy
 
