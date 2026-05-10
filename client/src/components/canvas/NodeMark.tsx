@@ -12,6 +12,15 @@ import { ClaimCard } from "./ClaimCard";
 
 export type Variant = "cosmos" | "blueprint";
 
+/**
+ * Single source of truth for the shape of a renderable node on the canvas.
+ *
+ * Canvas.tsx builds these from the cluster API response and hands them to
+ * Graph.tsx, which forwards each to NodeMark. Keeping the type here (and
+ * imported by Canvas + Graph) prevents the two declarations from drifting
+ * structurally — a previous duplicate copy in Canvas.tsx invited silent
+ * field-mismatch bugs.
+ */
 export interface DisplayNode {
   id: string;
   label: string;
@@ -22,12 +31,19 @@ export interface DisplayNode {
   // small badge so users know depth-of-evidence without rendering each item.
   sources?: number;
   excerpt?: string | null;
+  /** Originating item id for claim/item nodes — used by detail panels to
+   *  link back to the raw source markdown. */
+  itemId?: string | null;
   /** Canvas v2: full proposition for claim nodes (rendered in expanded card). */
   proposition?: string | null;
   /** Canvas v2: numeric confidence for claim nodes. */
   confidence?: number | null;
-  /** Canvas v2: ISO date for claim nodes (rendered in expanded card metadata). */
+  /** Canvas v2: ISO date for claim nodes (rendered in expanded card metadata).
+   *  Also fed into the v2 force layout to place nodes on recency rings. */
   whenIso?: string | null;
+  /** Canvas v2: 768-dim topical signature embedding (or null if not indexed
+   *  yet). Used by the v2 force layout for topical attraction. */
+  topicalVec?: number[] | null;
 }
 
 export interface NodeMarkProps {
@@ -106,7 +122,7 @@ export function NodeMark({
             headline={headline}
             proposition={proposition}
             confidence={confidence}
-            sourceCount={1 /* TODO: derive a real source count when the cluster API exposes per-claim provenance */}
+            sourceCount={0}            /* Hidden until per-claim evidence count is wired through the cluster API. */
             whenIso={node.whenIso ?? null}
             onDismiss={() => onClaimToggle?.(node.id)}
           />

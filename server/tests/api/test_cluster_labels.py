@@ -122,3 +122,27 @@ def test_cluster_node_includes_passthrough_fields(brain_and_app):
     assert item_node["title"] == "The Title"
     assert claim_node["headline"] == "Headline"
     assert claim_node["proposition"] == "Full proposition here."
+
+
+def test_claim_headline_empty_string_serializes_as_null(brain_and_app):
+    """The cluster builder converts ClaimMeta.headline=='' to None so the API
+    surfaces JSON null. Keeps the wire shape consistent with the TS type
+    (string | null), and lets the frontend's `node.headline ??` checks work."""
+    brain, app = brain_and_app
+    iid = _u.uuid4()
+    cid = _u.uuid4()
+    write_meta(brain, ItemMeta(
+        id=iid, kind="personal", source="test", created_at="2026-01-01T00:00:00Z",
+        original_filename=None, extracted_text="x",
+        when_iso=None, when_source="ingest_time", hooks={},
+    ))
+    write_claim(brain, ClaimMeta(
+        id=cid, item_id=iid,
+        proposition="Headline-less claim.",
+        confidence=0.5, supporting_span="...",
+        entity_slugs=[], created_at="2026-01-01T00:00:00Z",
+        # headline intentionally "" (the dataclass default)
+    ))
+    body = TestClient(app).get("/api/v1/cluster/all").json()
+    claim_node = next(n for n in body["nodes"] if n["id"] == f"claim:{cid}")
+    assert claim_node["headline"] is None     # not "", explicitly null

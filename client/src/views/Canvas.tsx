@@ -25,10 +25,9 @@ import { Graph, type GraphLink } from "../components/canvas/Graph";
 import { Legend } from "../components/canvas/Legend";
 import { SettingsModal } from "../components/canvas/SettingsModal";
 import { Toolbar } from "../components/canvas/Toolbar";
-import type { Variant } from "../components/canvas/NodeMark";
+import { type DisplayNode, type Variant } from "../components/canvas/NodeMark";
 import {
   deriveCategory,
-  type Category,
   type LinkKind,
 } from "../lib/canvasColors";
 import {
@@ -37,26 +36,6 @@ import {
   type LayoutLink,
   type LayoutNode,
 } from "../lib/forceLayout";
-
-type DisplayNode = {
-  id: string;
-  label: string;
-  cat: Category;
-  isEgo: boolean;
-  excerpt: string | null;
-  itemId: string | null;
-  sources?: number;
-  /** When this node was first captured / created. Used by v2 force layout
-   *  to place it on the appropriate recency ring. */
-  whenIso?: string | null;
-  /** 768-dim topical signature embedding (or null if not indexed yet).
-   *  Used by v2 force layout for topical attraction. */
-  topicalVec?: number[] | null;
-  /** Full proposition for claim nodes — rendered in the expanded card body. */
-  proposition?: string | null;
-  /** Numeric confidence — rendered in the expanded card metadata. */
-  confidence?: number | null;
-};
 
 const SUGGESTIONS = [
   "What did I capture about portfolio?",

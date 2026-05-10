@@ -39,3 +39,9 @@ def test_returns_none_when_nothing_to_extract():
 def test_frontmatter_without_title_falls_through_to_body():
     body = "---\nsource: telegram\nauthor: someone\n---\nFirst real line"
     assert extract_title(body, None) == "First real line"
+
+
+def test_markdown_h1_with_no_frontmatter_present():
+    """The H1 path is exercised when there's no frontmatter at all."""
+    body = "# Real Title\n\nrest of the document"
+    assert extract_title(body, None) == "Real Title"
