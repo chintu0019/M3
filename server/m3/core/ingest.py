@@ -35,6 +35,7 @@ from m3.brain import (
 )
 from m3.brain.git import commit_ingest
 from m3.brain.vectors import VectorIndex
+from m3.core import topical as topical_mod
 from m3.core.extract import (
     ExtractionOutput,
     Interpretation,
@@ -307,6 +308,16 @@ class Ingester:
                 confidence=parsed.interpretation.confidence,
             ))
 
+            # Topical signature for the canvas v2 force layout. Best-effort:
+            # a flaky upsert never rolls back the ingest.
+            try:
+                await topical_mod.refresh_for_item(
+                    brain_root=self.brain_root, item_id=inp.item_id,
+                    extracted_text=inp.text, embedder=self.embedder,
+                )
+            except Exception:
+                logger.exception("topical refresh (item %s) skipped", inp.item_id)
+
             # 2. Self updates
             self_touched: list[str] = []
             for su in parsed.self_updates:
@@ -346,6 +357,18 @@ class Ingester:
                     body=new_body,
                     match_existing_slug=match_slug,
                 )
+                # Reload the just-written EntityDoc so refresh_for_entity sees the
+                # canonical-name + body it actually persisted.
+                final_slug = match_slug or entity_doc.slugify(eu.canonical_name)
+                final_doc = entity_doc.load(self.brain_root, slug=final_slug)
+                if final_doc is not None:
+                    try:
+                        await topical_mod.refresh_for_entity(
+                            brain_root=self.brain_root, slug=final_slug,
+                            doc=final_doc, embedder=self.embedder,
+                        )
+                    except Exception:
+                        logger.exception("topical refresh (entity %s) skipped", final_slug)
                 entities_touched.append(eu.canonical_name)
                 if eu.section_update:
                     changelog.append(
@@ -403,14 +426,22 @@ class Ingester:
             for c in parsed.claims:
                 claim_id = uuid.uuid4()
                 slugs = [entity_doc.slugify(name) for name in (c.entity_names or [])]
-                claims_mod.write_claim(self.brain_root, claims_mod.ClaimMeta(
+                claim_meta = claims_mod.ClaimMeta(
                     id=claim_id, item_id=inp.item_id,
                     proposition=c.proposition,
                     confidence=c.confidence,
                     supporting_span=c.supporting_span,
                     entity_slugs=slugs,
                     created_at=now_iso,
-                ))
+                )
+                claims_mod.write_claim(self.brain_root, claim_meta)
+                try:
+                    await topical_mod.refresh_for_claim(
+                        brain_root=self.brain_root, claim=claim_meta,
+                        embedder=self.embedder,
+                    )
+                except Exception:
+                    logger.exception("topical refresh (claim %s) skipped", claim_id)
                 touched_entity_slugs.update(slugs)
 
             # 5b. Synthesis: for any entity whose claim set just changed, ask
@@ -444,6 +475,15 @@ class Ingester:
                         await synthesize_entity(
                             brain_root=self.brain_root, entity_slug=slug, llm=self.llm,
                         )
+                        synth = read_synthesis(self.brain_root, slug)
+                        if synth is not None:
+                            try:
+                                await topical_mod.refresh_for_synthesis(
+                                    brain_root=self.brain_root,
+                                    synth=synth, embedder=self.embedder,
+                                )
+                            except Exception:
+                                logger.exception("topical refresh (synthesis %s) skipped", slug)
                         synth_done += 1
                     except Exception:
                         logger.exception("synthesize %s: skipped due to error", slug)
