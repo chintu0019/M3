@@ -185,6 +185,18 @@ export function Graph({
 
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
 
+  // 1-hop neighbors of the expanded claim — they form the contextual halo and
+  // stay bright while everything else dims hard.
+  const haloIds = useMemo(() => {
+    if (!expandedClaimId) return new Set<string>();
+    const set = new Set<string>([expandedClaimId]);
+    for (const l of links) {
+      if (l.s === expandedClaimId) set.add(l.t);
+      if (l.t === expandedClaimId) set.add(l.s);
+    }
+    return set;
+  }, [expandedClaimId, links]);
+
   // hulls were used by the old force-directed layout to outline category
   // clusters — redundant now that nodes are deterministically slotted on
   // labeled rings.
@@ -301,7 +313,13 @@ export function Graph({
             const b = layout.byId.get(l.t);
             if (!a || !b) return null;
             const isHL = hasHL && highlighted.has(l.s) && highlighted.has(l.t);
-            const dim = hasHL && !isHL;
+            let dim = hasHL && !isHL;
+            // Expanded-claim focus: keep edges between halo members bright,
+            // dim every other edge hard so the halo subgraph reads clearly.
+            if (expandedClaimId) {
+              const involvesExpanded = haloIds.has(l.s) && haloIds.has(l.t);
+              dim = !involvesExpanded;
+            }
             const key = `${l.s}→${l.t}`;
             const isFlowing = flowEdges.has(key);
             // At rest, edges are barely visible (alpha 0.12) so the canvas
@@ -373,15 +391,25 @@ export function Graph({
             .map(s => {
               const n = nodeById.get(s.id);
               if (!n) return null;
-              let hl = hasHL && highlighted.has(s.id);
+              const hl = hasHL && highlighted.has(s.id);
               let dim = hasHL && !hl;
-              // When a claim card is expanded, dim every other node so the
-              // focused card has visual primacy. Suppress chat-highlight on
-              // non-expanded nodes to avoid a confusing "dimmed but bright"
-              // state where two different focus systems fight each other.
-              if (expandedClaimId && s.id !== expandedClaimId) {
-                hl = false;
-                dim = true;
+              let hlFinal = hl;
+              // Expanded-claim focus: keep expanded + 1-hop neighbors bright,
+              // dim the rest. Suppress chat-highlight on non-halo nodes during
+              // expansion to avoid a "dimmed but bright" tug-of-war between
+              // two focus systems.
+              if (expandedClaimId) {
+                const inHalo = haloIds.has(s.id);
+                if (!inHalo) {
+                  dim = true;
+                  hlFinal = false;
+                } else if (s.id === expandedClaimId) {
+                  dim = false;
+                  hlFinal = true;
+                } else {
+                  // 1-hop neighbor: bright but not hl-treated (subtle, not loud)
+                  dim = false;
+                }
               }
               const pre = preHighlighted.has(s.id);
               const pulse = pulseId === s.id;
@@ -394,7 +422,7 @@ export function Graph({
                   y={s.y}
                   radius={r}
                   variant={variant}
-                  hl={hl}
+                  hl={hlFinal}
                   dim={dim}
                   pre={pre}
                   pulse={pulse}
