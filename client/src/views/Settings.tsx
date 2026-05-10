@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api, LLMSettings, LocalAgentInfo } from "../api/client";
+import { useAutoUpdater } from "../hooks/useAutoUpdater";
 
 type Provider = "ollama" | "anthropic" | "local_agent";
 
@@ -21,12 +22,24 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState("");
   const [customCommand, setCustomCommand] = useState("");
   const [customArgs, setCustomArgs] = useState("-p");
+  // App version (read once via Tauri's getVersion). Falls back to "?" outside
+  // Tauri (e.g. `vite dev` in a plain browser).
+  const [appVersion, setAppVersion] = useState<string>("?");
+  const updater = useAutoUpdater();
 
   useEffect(() => {
     api.settings().then(setS).catch(e => setError(String(e)));
     api.listAgents().then(setAgents).catch(() => {
       // Detection failure is non-fatal — provider buttons still work.
     });
+    // Lazy-import keeps the Tauri API out of the dev bundle when running
+    // outside the desktop shell.
+    import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then(setAppVersion)
+      .catch(() => {
+        // Outside Tauri or plugin unavailable — leave the placeholder.
+      });
   }, []);
 
   // ALL hooks must be called before any conditional return — otherwise the
@@ -271,6 +284,36 @@ export default function Settings() {
         </div>
       </section>
 
+      <section className="m3-settings__section">
+        <header className="m3-settings__head">
+          <h2>About</h2>
+          <span className="m3-settings__head-tag">M3 v{appVersion}</span>
+        </header>
+        <p className="m3-settings__hint">
+          Updates land automatically — M3 checks GitHub on launch, on window
+          focus, and every few hours. The "Restart now" banner shows up at
+          the top of the window when a new version is downloaded.
+        </p>
+        <div>
+          <button
+            className="m3-btn m3-btn--small"
+            onClick={() => {
+              void updater.checkNow();
+            }}
+            disabled={
+              updater.stage.kind === "checking" ||
+              updater.stage.kind === "downloading" ||
+              updater.stage.kind === "ready"
+            }
+          >
+            {updater.stage.kind === "checking" ? "Checking…" : "Check for updates"}
+          </button>
+        </div>
+        <div className="m3-settings__hint" style={{ marginTop: 8 }}>
+          {updaterStatusLine(updater.stage)}
+        </div>
+      </section>
+
       <div
         className={
           "m3-settings__status " +
@@ -287,4 +330,36 @@ export default function Settings() {
       </div>
     </div>
   );
+}
+
+// Human-readable status line for the updater section. Kept outside the
+// component so it doesn't capture stale closures from re-renders.
+function updaterStatusLine(stage: ReturnType<typeof useAutoUpdater>["stage"]): string {
+  switch (stage.kind) {
+    case "idle":
+      return "Not checked yet.";
+    case "checking":
+      return "Checking GitHub for a new release…";
+    case "uptodate": {
+      const ago = formatRelativeTime(Date.now() - stage.checkedAt);
+      return `You're on the latest release. (Last checked ${ago}.)`;
+    }
+    case "downloading":
+      return `Downloading update — ${Math.round(stage.progress * 100)}%.`;
+    case "ready":
+      return `M3 ${stage.version} is ready — click "Restart now" in the banner.`;
+    case "error":
+      return `Couldn't check: ${stage.message}`;
+  }
+}
+
+function formatRelativeTime(ms: number): string {
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr} h ago`;
+  const day = Math.round(hr / 24);
+  return `${day} d ago`;
 }
