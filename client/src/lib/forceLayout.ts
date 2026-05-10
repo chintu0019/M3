@@ -80,7 +80,7 @@ export const DEFAULT_PARAMS: LayoutParams = {
 // "now" is the center and similarity, not type, drives clustering.
 const V2_TOPICAL_K = 0.0009;   // attraction strength scaled by similarity
 const V2_RECENCY_K = 0.012;    // radial pull toward target ring
-const V2_REPULSE   = 8000;     // Coulomb-style anti-overlap
+const V2_REPULSE   = 18000;    // Coulomb-style anti-overlap
 const V2_DAMP      = 0.55;     // velocity damping per frame — lower than 0.82
                                 //   so equilibrium velocity collapses faster
 const V2_MAX_V     = 4;        // hard per-frame velocity cap so a freshly-cooled
@@ -430,14 +430,18 @@ export function initLayout(
     // run at full strength; once cool the canvas barely breathes.
     const temp = temperature();
 
-    // 1. Recency radial pull — each non-dragged node pulled toward its target ring
+    // 1. Recency radial pull — each non-dragged node pulled toward its target ring.
+    //    NOT subject to cooling: the recency band is a structural property of the
+    //    node, not an animated force, so it always pulls at full strength. Without
+    //    this, once the system cools nodes lose their radial anchor and topical
+    //    attraction drags them into clumps.
     for (let i = 0; i < state.length; i++) {
       const s = state[i];
       if (s.dragging) continue;
       const target = recencyRadiusFor(whenIsos[i] ?? null);
       const dx = s.x - cx, dy = s.y - cy;
       const r = Math.hypot(dx, dy) || 1;
-      const drift = (target - r) * V2_RECENCY_K * temp;
+      const drift = (target - r) * V2_RECENCY_K;
       s.vx += (dx / r) * drift;
       s.vy += (dy / r) * drift;
     }
@@ -467,7 +471,9 @@ export function initLayout(
         const b = state[j];
         const dx = b.x - a.x;
         const dy = b.y - a.y;
-        const d2 = Math.max(40, dx*dx + dy*dy);
+        // Floor bumped to 100 to soften close-range force spikes that caused
+        // the "jumping" feel between wide pill nodes.
+        const d2 = Math.max(100, dx*dx + dy*dy);
         const d = Math.sqrt(d2);
 
         // Coulomb repulsion (always)
@@ -475,11 +481,14 @@ export function initLayout(
         a.vx -= (dx / d) * fr; a.vy -= (dy / d) * fr;
         b.vx += (dx / d) * fr; b.vy += (dy / d) * fr;
 
-        // Topical attraction (only above threshold)
+        // Topical attraction (only above threshold). Distance term capped at
+        // 200 so topically-similar nodes on opposite recency rings can't
+        // ratchet each other across bands — topical now acts as ring-band
+        // cohesion, not a long-range pull that overrides recency.
         const vb = topicalVecs[j];
         const sim = topicalSimilarity(va, vb);
         if (sim >= V2_SIM_THRESHOLD) {
-          const fa = sim * V2_TOPICAL_K * d * temp;
+          const fa = sim * V2_TOPICAL_K * Math.min(d, 200) * temp;
           a.vx += (dx / d) * fa; a.vy += (dy / d) * fa;
           b.vx -= (dx / d) * fa; b.vy -= (dy / d) * fa;
         }
@@ -489,6 +498,9 @@ export function initLayout(
     // 5. Integrate — damped Euler with a hard per-frame velocity cap. Without
     //    the cap a freshly-reheated drag can fling neighbors hundreds of pixels
     //    in a single tick; the cap also bounds drift if cooling ever fails.
+    //    Once cool, velocity is hard-zeroed every frame for non-dragged nodes,
+    //    eliminating perpetual micro-drift after settling.
+    const cool = temp < 0.1;
     for (const s of state) {
       if (s.dragging) { s.vx = 0; s.vy = 0; continue; }
       s.vx *= V2_DAMP; s.vy *= V2_DAMP;
@@ -497,6 +509,7 @@ export function initLayout(
       if (s.vy >  V2_MAX_V) s.vy =  V2_MAX_V;
       else if (s.vy < -V2_MAX_V) s.vy = -V2_MAX_V;
       s.x += s.vx; s.y += s.vy;
+      if (cool) { s.vx = 0; s.vy = 0; }
     }
     frame++;
     void pointer;
