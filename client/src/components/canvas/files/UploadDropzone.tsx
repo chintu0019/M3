@@ -71,6 +71,7 @@ export function UploadDropzone({ onIngest }: UploadDropzoneProps) {
 
   return (
     <div
+      data-m3-dropzone
       className={`m3-files__dropzone${hover ? " m3-files__dropzone--hover" : ""}`}
       onDragOver={e => {
         e.preventDefault();

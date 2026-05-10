@@ -111,7 +111,12 @@ jobs:
             Existing installs auto-update via the in-app **Restart now** banner — no manual step needed.
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          # createUpdaterArtifacts is off in tauri.conf.json so local builds
+          # don't require TAURI_SIGNING_PRIVATE_KEY. The release pipeline is
+          # the only place that needs signed updater artifacts, so we
+          # re-enable it here via a static config override (no untrusted
+          # input is interpolated into this string).
+          args: --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Upload macOS DMG for cask updater
         if: matrix.platform == 'macos-latest'
