@@ -52,6 +52,10 @@ type DisplayNode = {
   /** 768-dim topical signature embedding (or null if not indexed yet).
    *  Used by v2 force layout for topical attraction. */
   topicalVec?: number[] | null;
+  /** Full proposition for claim nodes — rendered in the expanded card body. */
+  proposition?: string | null;
+  /** Numeric confidence — rendered in the expanded card metadata. */
+  confidence?: number | null;
 };
 
 const SUGGESTIONS = [
@@ -225,6 +229,8 @@ export default function Canvas() {
         sources: n.type === "entity" ? sourcesByEntity.get(n.id) : undefined,
         whenIso: n.when_iso ?? null,
         topicalVec: n.topical_vec ?? null,
+        proposition: n.proposition ?? null,
+        confidence: n.confidence ?? null,
       });
     }
 

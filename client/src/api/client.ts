@@ -181,6 +181,12 @@ export interface ClusterNode {
   /** v2 force layout: 768-dim topical signature embedding. Null if the
    *  TopicalIndex has no entry for this node (e.g. brain predates v2). */
   topical_vec?: number[] | null;
+  /** Canvas v2: interpretive headline used as the visible label on claim pills. */
+  headline?: string | null;
+  /** Canvas v2: parsed clean title for item nodes. */
+  title?: string | null;
+  /** Canvas v2: full proposition for claim nodes — used by the expanded card. */
+  proposition?: string | null;
 }
 
 export interface ClusterEdge {
