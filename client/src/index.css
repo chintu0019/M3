@@ -1642,3 +1642,27 @@ body { overflow: hidden; }
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 .m3-row-menu__item--has-children:hover .m3-row-menu__submenu { display: block; }
+
+.m3-toasts {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9999;
+  pointer-events: none;
+}
+.m3-toast {
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-line);
+  color: var(--m3-ink);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  max-width: 360px;
+  pointer-events: auto;
+}
+.m3-toast--ok  { border-color: oklch(0.62 0.15 145); }
+.m3-toast--err { border-color: oklch(0.62 0.18 25); }
