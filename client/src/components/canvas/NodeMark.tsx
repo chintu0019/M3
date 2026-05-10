@@ -89,16 +89,23 @@ export function NodeMark({
   // is even called; this gate only handles claim/item/synthesis.
   if (v2) {
     const cat = node.cat;
-    if (cat === "claim" && zoomK < 0.9) return null;
-    if (cat === "item"  && zoomK < 1.4) return null;
-    if (cat === "synthesis" && zoomK < 0.5) return null;
+    // Highlighted nodes (focus, chat citation, or expanded) bypass the
+    // multi-resolution zoom gate — when the user has spotlighted something,
+    // we always show it regardless of how far they're zoomed out.
+    const spotlight = hl || expanded;
+    if (!spotlight) {
+      if (cat === "claim" && zoomK < 0.9) return null;
+      if (cat === "item"  && zoomK < 1.4) return null;
+      if (cat === "synthesis" && zoomK < 0.5) return null;
+    }
   }
 
   // Canvas v2: claim nodes render as a pill (collapsed) or pill + card
   // (expanded), instead of the small disc rendered for entities/items. The
-  // multi-resolution gate above already returned null for k < 0.9, so we
-  // only reach this branch when the claim is "resolved enough" to read.
-  if (v2 && node.cat === "claim" && zoomK >= 0.9) {
+  // multi-resolution gate above already returned null for k < 0.9 unless
+  // the node is spotlighted (focused / cited / expanded); in that
+  // bypass case we still want the pill rendering, not the generic disc.
+  if (v2 && node.cat === "claim" && (zoomK >= 0.9 || hl || expanded)) {
     const headline = node.label || "(no headline)";
     const proposition = node.proposition || node.label || "";
     const confidence = node.confidence ?? null;
