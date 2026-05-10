@@ -43,13 +43,19 @@ export interface GraphProps {
    *  zoom gating on nodes (handled in NodeMark). When false (default), the
    *  existing radial-by-type layout renders unchanged. */
   v2?: boolean;
+  /** Canvas v2: id of the currently expanded claim card (or null). Forwarded
+   *  to NodeMark so the matching pill renders an attached ClaimCard. */
+  expandedClaimId?: string | null;
+  /** Canvas v2: invoked from a claim pill click. Canvas owns the toggle so
+   *  only one card can be open at a time. */
+  onClaimToggle?: (id: string) => void;
 }
 
 export function Graph({
   layout, nodes, links, variant, showHulls,
   highlighted, preHighlighted, pulseId, flowEdges,
   cameraRef, onCamera, onNodeClick, onCanvasClick, cameraVersion: _cameraVersion,
-  v2 = false,
+  v2 = false, expandedClaimId = null, onClaimToggle,
 }: GraphProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -379,6 +385,8 @@ export function Graph({
                   showCard={lodCard}
                   v2={v2}
                   zoomK={cam.k}
+                  expanded={expandedClaimId === s.id}
+                  onClaimToggle={onClaimToggle}
                 />
               );
             })}

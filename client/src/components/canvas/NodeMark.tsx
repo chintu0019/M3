@@ -7,6 +7,8 @@
 // in Graph.tsx.
 
 import { catColor, type Category } from "../../lib/canvasColors";
+import { ClaimPill } from "./ClaimPill";
+import { ClaimCard } from "./ClaimCard";
 
 export type Variant = "cosmos" | "blueprint";
 
@@ -20,6 +22,12 @@ export interface DisplayNode {
   // small badge so users know depth-of-evidence without rendering each item.
   sources?: number;
   excerpt?: string | null;
+  /** Canvas v2: full proposition for claim nodes (rendered in expanded card). */
+  proposition?: string | null;
+  /** Canvas v2: numeric confidence for claim nodes. */
+  confidence?: number | null;
+  /** Canvas v2: ISO date for claim nodes (rendered in expanded card metadata). */
+  whenIso?: string | null;
 }
 
 export interface NodeMarkProps {
@@ -41,11 +49,16 @@ export interface NodeMarkProps {
   /** Current camera zoom (cam.k). Used by v2 mode for resolution-based
    *  rendering decisions. Forwarded from Graph.tsx. */
   zoomK?: number;
+  /** Canvas v2: this claim node is the currently-expanded one — render
+   *  the ClaimCard alongside the pill. */
+  expanded?: boolean;
+  /** Canvas v2: invoked on pill click / dismiss to toggle the expanded card. */
+  onClaimToggle?: (id: string) => void;
 }
 
 export function NodeMark({
   node, x, y, radius, variant, hl, dim, pre, pulse, showLabel, showCard,
-  v2 = false, zoomK = 1,
+  v2 = false, zoomK = 1, expanded = false, onClaimToggle,
 }: NodeMarkProps) {
   // Canvas v2: multi-resolution zoom gating. Suppress dense-text node types
   // at far zoom; they re-appear as the user zooms in. v1 path is unaffected.
@@ -63,6 +76,43 @@ export function NodeMark({
     if (cat === "claim" && zoomK < 0.9) return null;
     if (cat === "item"  && zoomK < 1.4) return null;
     if (cat === "synthesis" && zoomK < 0.5) return null;
+  }
+
+  // Canvas v2: claim nodes render as a pill (collapsed) or pill + card
+  // (expanded), instead of the small disc rendered for entities/items. The
+  // multi-resolution gate above already returned null for k < 0.9, so we
+  // only reach this branch when the claim is "resolved enough" to read.
+  if (v2 && node.cat === "claim" && zoomK >= 0.9) {
+    const headline = node.label || "(no headline)";
+    const proposition = node.proposition || node.label || "";
+    const confidence = node.confidence ?? null;
+    const pillColor = catColor(node.cat, 1);
+    return (
+      <>
+        <ClaimPill
+          x={x}
+          y={y}
+          headline={headline}
+          confidence={confidence}
+          color={pillColor}
+          hl={hl}
+          dim={dim}
+          onClick={() => onClaimToggle?.(node.id)}
+        />
+        {expanded && (
+          <ClaimCard
+            x={x}
+            y={y}
+            headline={headline}
+            proposition={proposition}
+            confidence={confidence}
+            sourceCount={1 /* TODO: derive a real source count when the cluster API exposes per-claim provenance */}
+            whenIso={node.whenIso ?? null}
+            onDismiss={() => onClaimToggle?.(node.id)}
+          />
+        )}
+      </>
+    );
   }
 
   const color = catColor(node.cat, 1);

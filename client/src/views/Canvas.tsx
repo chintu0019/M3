@@ -130,6 +130,10 @@ export default function Canvas() {
   // canvas background or hit Esc to clear.
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
 
+  // Currently expanded claim node (canvas v2). Lives here so only one card
+  // can be open at a time; ESC and canvas-click both clear it.
+  const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
+
   const cameraRef = useRef({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number | null>(null);
@@ -435,7 +439,10 @@ export default function Canvas() {
   // matter where the user clicked last.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") clearFocus();
+      if (e.key === "Escape") {
+        clearFocus();
+        setExpandedClaimId(null);
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -617,9 +624,16 @@ export default function Canvas() {
           cameraRef={cameraRef}
           onCamera={bumpCam}
           onNodeClick={onCanvasNodeClick}
-          onCanvasClick={clearFocus}
+          onCanvasClick={() => {
+            clearFocus();
+            setExpandedClaimId(null);
+          }}
           cameraVersion={camVer}
           v2={v2}
+          expandedClaimId={expandedClaimId}
+          onClaimToggle={(id: string) =>
+            setExpandedClaimId(prev => (prev === id ? null : id))
+          }
         />
         <DetailPanel
           node={focusedNode}
