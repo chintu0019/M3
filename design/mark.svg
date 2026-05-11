@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="2.999" stroke-linecap="butt" stroke-linejoin="miter" aria-label="M3">
+  <g>
+    <line x1="18.347" y1="27.802" x2="18.347" y2="99.445" />
+    <line x1="101.653" y1="27.802" x2="101.653" y2="99.445" />
+    <line x1="13.536" y1="99.445" x2="23.158" y2="99.445" />
+    <line x1="96.842" y1="99.445" x2="106.464" y2="99.445" />
+    <line x1="18.347" y1="27.802" x2="60.000" y2="84.075" />
+    <line x1="101.653" y1="27.802" x2="60.000" y2="84.075" />
+  </g>
+  <g fill="currentColor" stroke="none">
+    <circle cx="18.347" cy="27.802" r="8.747" />
+    <circle cx="101.653" cy="27.802" r="8.747" />
+    <circle cx="60.000" cy="84.075" r="8.747" />
+  </g>
+</svg>

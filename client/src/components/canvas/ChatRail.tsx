@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { catColor, type Category } from "../../lib/canvasColors";
+import { M3Mark } from "../M3Mark";
 
 export interface CitedRef {
   id: string;            // node id in the canvas (e.g. "item:<uuid>")
@@ -250,7 +251,9 @@ export function ChatRail({
     <aside className="m3-chat-rail">
       <header className="m3-chat-rail__head">
         <div className="m3-chat-rail__title">
-          <span className="m3-chat-rail__logo">M3</span>
+          <span className="m3-chat-rail__logo" aria-hidden="true">
+            <M3Mark size={18} />
+          </span>
           <span>Conversation</span>
         </div>
         <button className="m3-btn-ghost" onClick={reset} title="New conversation" aria-label="New conversation">

@@ -5,5 +5,22 @@
   "display": "standalone",
   "theme_color": "#0f0f13",
   "background_color": "#0f0f13",
-  "icons": []
+  "icons": [
+    {
+      "src": "/mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon-32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    }
+  ]
 }

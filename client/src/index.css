@@ -81,15 +81,10 @@ body { overflow: hidden; }
 }
 
 .m3-chat-rail__logo {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  background: var(--m3-ink);
-  color: var(--m3-bg);
-  font-weight: 700;
-  font-size: 11px;
-  font-family: "JetBrains Mono", monospace;
+  display: inline-flex;
+  align-items: center;
+  color: var(--m3-ink);
+  opacity: 0.92;
 }
 
 .m3-btn-ghost {
