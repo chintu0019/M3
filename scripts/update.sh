@@ -53,6 +53,30 @@ step "Building m3 wheel into src-tauri/resources/"
 "$ROOT/scripts/build-wheel.sh"
 
 step "Rebuilding Tauri desktop app"
+# On macOS, Tauri's DMG bundler creates a writable temp image
+# (rw.<pid>.<name>.dmg) and mounts it under /Volumes/dmg.XXXX while copying
+# the .app inside. If a previous build was killed mid-bundle, that mount
+# is left behind and the next `cargo tauri build` fails with
+# "failed to run bundle_dmg.sh" because hdiutil refuses to attach an image
+# that's already mounted. Detach any leftovers belonging to *this* build
+# tree before invoking cargo, so a single rerun unsticks the loop.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  MAC_BUNDLE_DIR="$ROOT/src-tauri/target/release/bundle/macos"
+  if [[ -d "$MAC_BUNDLE_DIR" ]]; then
+    while IFS= read -r stuck_image; do
+      [[ -z "$stuck_image" ]] && continue
+      stuck_dev="$(hdiutil info | awk -v img="$stuck_image" '
+        /^image-path/ { p = ($NF == img) }
+        p && /^\/dev\/disk[0-9]+[[:space:]]+GUID/ { print $1; exit }
+      ')"
+      if [[ -n "$stuck_dev" ]]; then
+        warn "Detaching stale DMG mount $stuck_dev ($stuck_image)"
+        hdiutil detach "$stuck_dev" -force >/dev/null 2>&1 || true
+      fi
+      rm -f "$stuck_image"
+    done < <(find "$MAC_BUNDLE_DIR" -maxdepth 1 -name 'rw.*.dmg' 2>/dev/null)
+  fi
+fi
 ( cd src-tauri && cargo tauri build )
 
 # Find the freshly built bundle and tell the user where it is.

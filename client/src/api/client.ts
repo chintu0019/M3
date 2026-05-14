@@ -230,6 +230,29 @@ export interface LocalAgentInfo {
   path: string | null;
 }
 
+// --- Telegram capture ---
+
+export interface TelegramStatus {
+  configured: boolean;
+  running: boolean;
+  bot_username: string | null;
+  allowed_chats: number[];
+  last_error: string | null;
+  started_at: number | null;
+}
+
+export interface TelegramPairStart {
+  code: string;
+  deeplink: string;
+  qr_data_url: string;   // data:image/svg+xml;base64,… — drop into <img src=>
+}
+
+export interface TelegramPairStatus {
+  status: "pending" | "linked" | "expired";
+  chat_id: number | null;
+  chat_title: string | null;
+}
+
 // --- methods ---
 
 interface ChatStreamOptions {
@@ -426,4 +449,23 @@ export const api = {
 
   deleteFolder: (fid: string) =>
     request<void>(`/api/v1/folders/${encodeURIComponent(fid)}`, { method: "DELETE" }),
+
+  // --- Telegram capture ---
+
+  telegramStatus: () => request<TelegramStatus>("/api/v1/telegram/status"),
+
+  telegramConnect: (token: string) =>
+    request<TelegramStatus>("/api/v1/telegram/connect", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  telegramDisconnect: () =>
+    request<TelegramStatus>("/api/v1/telegram/disconnect", { method: "POST" }),
+
+  telegramPairStart: () =>
+    request<TelegramPairStart>("/api/v1/telegram/pair/start", { method: "POST" }),
+
+  telegramPairPoll: (code: string) =>
+    request<TelegramPairStatus>(`/api/v1/telegram/pair/${encodeURIComponent(code)}`),
 };

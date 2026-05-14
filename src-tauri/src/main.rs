@@ -31,7 +31,14 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
 const DEFAULT_PORT: u16 = 7007;
-const STARTUP_TIMEOUT_SECS: u64 = 25;
+// First-run downloads the ~250 MB fastembed model before binding the port.
+// On a slow connection that easily exceeds 25s, surfaces as a "startup timed
+// out" dialog even though the server is making progress. `m3 init` now
+// pre-warms the model so cold starts after the first should bind in seconds,
+// but we keep a generous ceiling for the very first launch and for cases
+// where the cache was wiped (e.g. macOS purging $TMPDIR if M3_MODEL_CACHE
+// got overridden back into temp).
+const STARTUP_TIMEOUT_SECS: u64 = 180;
 
 /// Handle to the child m3 server, kept alive for the lifetime of the app.
 ///

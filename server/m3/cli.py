@@ -24,10 +24,32 @@ def _default_brain() -> Path:
 
 @app.command()
 def init(brain: Path = typer.Option(None, "--brain", help="Path to the brain directory.")):
-    """Create or upgrade a brain directory."""
+    """Create or upgrade a brain directory.
+
+    Also pre-warms the local embedding model so the first `m3 start` doesn't
+    block for several minutes downloading ~250 MB while the desktop shell's
+    startup-timeout dialog counts down.
+    """
     target = brain or _default_brain()
     init_brain(target)
     typer.echo(f"initialized brain at {target}")
+
+    # Pre-warm the embedding model. Doing it here (instead of lazily on the
+    # first request) means a botched download fails `m3 init` loudly, not the
+    # next `m3 start` silently.
+    from m3.core.llm.embeddings import FastEmbedProvider, default_model_cache_dir
+    cache_dir = default_model_cache_dir()
+    typer.echo(f"preparing embedding model in {cache_dir} (one-time ~250 MB download)…")
+    try:
+        FastEmbedProvider()
+    except Exception as e:
+        typer.echo(
+            f"warning: embedding model download failed: {e}\n"
+            "the server will retry on first start; re-run `m3 init` if it keeps failing.",
+            err=True,
+        )
+    else:
+        typer.echo("embedding model ready")
 
 
 @app.command()

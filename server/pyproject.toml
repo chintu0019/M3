@@ -21,6 +21,10 @@ dependencies = [
     "fastembed>=0.4",
     # Capture channels
     "python-telegram-bot>=21.0",
+    # QR codes for the Telegram pairing flow (Settings → Connect Telegram).
+    # We use the pure-Python SVG factory so no Pillow add-on is required
+    # here (Pillow is already pulled in elsewhere for thumbnails).
+    "qrcode>=7.4",
     # Content extractors
     "trafilatura>=1.12",
     "pdfplumber>=0.11",

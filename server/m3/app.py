@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Protocol
 
@@ -28,6 +29,7 @@ from m3.api.questions import build_questions_router
 from m3.api.retrieve import build_retrieve_router
 from m3.api.self_doc import build_self_router
 from m3.api.settings import build_settings_router
+from m3.api.telegram import build_telegram_router
 
 logger = logging.getLogger("m3.app")
 
@@ -36,8 +38,28 @@ class _Embedder(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Bring up / tear down background services tied to the FastAPI process.
+
+    Currently: the in-process Telegram bot. If a token is configured we
+    start polling on app boot; if not, the supervisor stays dormant until
+    the user pastes a token via Settings → Telegram → Connect (which
+    calls ``supervisor.restart()`` directly). On shutdown we always stop
+    cleanly so the upstream Telegram getUpdates connection closes.
+    """
+    from m3.capture import supervisor
+    from m3.core import config as _cfg
+    if _cfg.telegram_token():
+        await supervisor.start()
+    try:
+        yield
+    finally:
+        await supervisor.stop()
+
+
 def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> FastAPI:
-    app = FastAPI(title="M3", version="0.2.0")
+    app = FastAPI(title="M3", version="0.2.0", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
@@ -58,6 +80,7 @@ def build_app(*, brain_root: Path, embedder: _Embedder, llm_factory=None) -> Fas
     app.include_router(build_chats_router(brain_root=brain_root))
     app.include_router(build_cluster_router(brain_root=brain_root, embedder=embedder))
     app.include_router(build_settings_router())
+    app.include_router(build_telegram_router())
 
     @app.get("/api/v1/status")
     async def status():

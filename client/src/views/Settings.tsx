@@ -7,8 +7,14 @@
 // already writes them), and showing them encouraged unnecessary edits.
 // Power users can still set the env vars directly.
 
-import { useEffect, useMemo, useState } from "react";
-import { api, LLMSettings, LocalAgentInfo } from "../api/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  api,
+  LLMSettings,
+  LocalAgentInfo,
+  TelegramPairStart,
+  TelegramStatus,
+} from "../api/client";
 import { useAutoUpdater } from "../hooks/useAutoUpdater";
 
 type Provider = "ollama" | "anthropic" | "local_agent";
@@ -284,6 +290,8 @@ export default function Settings() {
         </div>
       </section>
 
+      <TelegramSection />
+
       <section className="m3-settings__section">
         <header className="m3-settings__head">
           <h2>Canvas</h2>
@@ -348,6 +356,303 @@ export default function Settings() {
         }
       >
         {saving ? "saving…" : error ? error : message || ""}
+      </div>
+    </div>
+  );
+}
+
+// --- Telegram capture ---
+//
+// Three states for the card:
+//   - not configured           : "Connect Telegram" CTA → opens the modal
+//   - configured but not running: shows last_error, retry + disconnect
+//   - running                  : shows @bot username + linked chats + Pair device / Disconnect
+//
+// The modal handles two sub-flows:
+//   1. token entry (paste from BotFather)
+//   2. QR pairing (server returns a data-URL PNG/SVG and a deeplink; we poll
+//      every 2s until linked)
+function TelegramSection() {
+  const [s, setS] = useState<TelegramStatus | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [modal, setModal] = useState<"closed" | "token" | "pair">("closed");
+
+  const refresh = useCallback(async () => {
+    try {
+      setS(await api.telegramStatus());
+    } catch (e) {
+      setLoadError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function disconnect() {
+    if (!confirm("Disconnect Telegram? The bot will stop receiving messages and the linked chat list will be cleared.")) return;
+    setS(await api.telegramDisconnect());
+  }
+
+  return (
+    <section className="m3-settings__section">
+      <header className="m3-settings__head">
+        <h2>Telegram capture</h2>
+        {s?.running && (
+          <span className="m3-settings__head-tag">Online · @{s.bot_username}</span>
+        )}
+        {s && s.configured && !s.running && (
+          <span className="m3-settings__head-tag" style={{ color: "var(--m3-warn, #c0392b)" }}>Offline</span>
+        )}
+      </header>
+      <p className="m3-settings__hint">
+        Send anything to your personal Telegram bot — text, photos, voice notes, files —
+        and M3 ingests it into your brain. One-time setup; the bot runs inside M3.
+      </p>
+
+      {loadError && (
+        <div className="m3-settings__banner m3-settings__banner--warn">{loadError}</div>
+      )}
+
+      {!s?.configured && (
+        <div>
+          <button
+            className="m3-btn m3-btn--small m3-btn--primary"
+            onClick={() => setModal("token")}
+          >
+            Connect Telegram
+          </button>
+        </div>
+      )}
+
+      {s?.configured && (
+        <div className="m3-field">
+          <div className="m3-settings__hint">
+            {s.running
+              ? `Linked chats: ${s.allowed_chats.length === 0 ? "none yet — pair a device to start receiving" : s.allowed_chats.length}`
+              : `Bot is offline${s.last_error ? ` — ${s.last_error}` : ""}.`}
+          </div>
+          <div className="m3-row" style={{ marginTop: 8 }}>
+            {s.running && (
+              <button
+                className="m3-btn m3-btn--small m3-btn--primary"
+                onClick={() => setModal("pair")}
+              >
+                Pair a device
+              </button>
+            )}
+            {!s.running && (
+              <button
+                className="m3-btn m3-btn--small"
+                onClick={() => setModal("token")}
+              >
+                Re-enter token
+              </button>
+            )}
+            <button
+              className="m3-btn m3-btn--small m3-btn--ghost"
+              onClick={disconnect}
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+      )}
+
+      {modal !== "closed" && (
+        <TelegramConnectModal
+          initialStep={modal}
+          onClose={() => {
+            setModal("closed");
+            void refresh();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+// Modal walks the user through the two manual steps Telegram requires:
+// pasting a BotFather token, then scanning a QR to link the chat.
+// `initialStep="pair"` lets the parent reopen straight into the QR
+// when the bot's already online (e.g. user is adding a second device).
+function TelegramConnectModal({
+  initialStep,
+  onClose,
+}: {
+  initialStep: "token" | "pair";
+  onClose: () => void;
+}) {
+  const [step, setStep] = useState<"token" | "pair">(initialStep);
+  const [token, setToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pair, setPair] = useState<TelegramPairStart | null>(null);
+  const [pairStatus, setPairStatus] = useState<"pending" | "linked" | "expired">("pending");
+  const [linkedTitle, setLinkedTitle] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
+
+  async function submitToken() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.telegramConnect(token.trim());
+      setStep("pair");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Lazily start a pairing code the first time we enter the pair step.
+  // Re-running on retry: call api.telegramPairStart() again to get a
+  // fresh code + QR.
+  const startPair = useCallback(async () => {
+    setError(null);
+    setPairStatus("pending");
+    try {
+      const p = await api.telegramPairStart();
+      setPair(p);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (step !== "pair" || pair !== null) return;
+    void startPair();
+  }, [step, pair, startPair]);
+
+  // Poll the pair endpoint every 2s while the QR is up. Stops on linked
+  // or expired so we don't keep hitting the server after the modal's
+  // done its job.
+  useEffect(() => {
+    if (step !== "pair" || pair === null || pairStatus !== "pending") return;
+    const tick = async () => {
+      try {
+        const r = await api.telegramPairPoll(pair.code);
+        setPairStatus(r.status);
+        if (r.status === "linked") {
+          setLinkedTitle(r.chat_title);
+        }
+      } catch {
+        // Silent — next tick will retry. Showing a transient network blip
+        // mid-pairing is noisier than just retrying.
+      }
+    };
+    pollRef.current = window.setInterval(tick, 2000);
+    return () => {
+      if (pollRef.current !== null) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [step, pair, pairStatus]);
+
+  return (
+    <div className="m3-modal-backdrop" onClick={onClose}>
+      <div className="m3-modal" onClick={e => e.stopPropagation()}>
+        <header className="m3-modal__head">
+          <h3>Connect Telegram</h3>
+          <button className="m3-btn m3-btn--ghost m3-btn--small" onClick={onClose}>Close</button>
+        </header>
+
+        {step === "token" && (
+          <div className="m3-modal__body">
+            <ol className="m3-settings__hint" style={{ paddingLeft: 18, marginTop: 0 }}>
+              <li>Open Telegram and message <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a>.</li>
+              <li>Send <code>/newbot</code>, pick any name + username.</li>
+              <li>BotFather replies with a token like <code>123456:ABC-DEF…</code> — paste it below.</li>
+            </ol>
+            <div className="m3-field">
+              <label className="m3-field__label">Bot token</label>
+              <input
+                type="password"
+                className="m3-input m3-input--mono"
+                value={token}
+                onChange={e => setToken(e.target.value)}
+                placeholder="123456:ABC-DEF…"
+                autoFocus
+              />
+            </div>
+            {error && <div className="m3-settings__banner m3-settings__banner--warn">{error}</div>}
+            <div className="m3-row" style={{ justifyContent: "flex-end" }}>
+              <button
+                className="m3-btn m3-btn--primary"
+                disabled={submitting || !token.trim()}
+                onClick={submitToken}
+              >
+                {submitting ? "Connecting…" : "Save & continue"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "pair" && (
+          <div className="m3-modal__body">
+            {pairStatus === "linked" ? (
+              <div>
+                <div className="m3-settings__banner m3-settings__banner--ok" style={{ marginBottom: 12 }}>
+                  ✓ Linked{linkedTitle ? ` with ${linkedTitle}` : ""}. Send the bot a message any time.
+                </div>
+                <div className="m3-row" style={{ justifyContent: "flex-end" }}>
+                  <button className="m3-btn m3-btn--primary" onClick={onClose}>Done</button>
+                </div>
+              </div>
+            ) : pairStatus === "expired" ? (
+              <div>
+                <div className="m3-settings__banner m3-settings__banner--warn" style={{ marginBottom: 12 }}>
+                  This pairing link expired. Generate a new one.
+                </div>
+                <div className="m3-row" style={{ justifyContent: "flex-end" }}>
+                  <button
+                    className="m3-btn m3-btn--primary"
+                    onClick={() => { setPair(null); }}
+                  >
+                    New code
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="m3-settings__hint">
+                  Open Telegram on your phone, tap the camera/scan icon, and scan this QR.
+                  Telegram will open your bot and link this chat to M3 automatically.
+                </p>
+                <div
+                  className="m3-telegram-qr"
+                  style={{
+                    display: "flex",
+                    justifyContent: "center",
+                    padding: 16,
+                    background: "white",
+                    borderRadius: 8,
+                  }}
+                >
+                  {pair ? (
+                    <img
+                      src={pair.qr_data_url}
+                      alt="Telegram pairing QR code"
+                      style={{ width: 240, height: 240 }}
+                    />
+                  ) : (
+                    <div style={{ width: 240, height: 240, display: "grid", placeItems: "center", color: "#666" }}>
+                      Generating QR…
+                    </div>
+                  )}
+                </div>
+                {pair && (
+                  <div className="m3-settings__hint" style={{ marginTop: 8, textAlign: "center" }}>
+                    Or open this link on the phone:{" "}
+                    <a href={pair.deeplink} target="_blank" rel="noreferrer">{pair.deeplink}</a>
+                  </div>
+                )}
+                {error && <div className="m3-settings__banner m3-settings__banner--warn">{error}</div>}
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
